@@ -1,0 +1,96 @@
+{
+  "_about": [
+    "Mutation-test targets for the passkey broker. Each target names the file to mutate",
+    "and the test command that must notice a change (the fast module(s) that cover it).",
+    "Run with tools/mutator.py, or as part of tools/run_tests.sh.",
+    "min_kill_rate is the floor; below it the run fails, and a target that yields no",
+    "mutants at all fails too, so a mutation pass can never be green over nothing.",
+    "The vendored harness (tools/*.py) is exempt: its shipped self-tests do not cover the",
+    "broker's own surface, and mutating the runner's masker guards can loop forever."
+  ],
+  "min_kill_rate": 0.8,
+  "timeout": 90,
+  "per_operator": 2,
+  "max_mutants": 40,
+  "targets": [
+    {
+      "path": "bin/webauthn_core.py",
+      "lang": "python",
+      "tests": ["python3", "-m", "unittest", "discover", "-s", "tests",
+                "-p", "test_unit_webauthn_core.py", "-q"]
+    },
+    {
+      "path": "bin/broker_paths.py",
+      "lang": "python",
+      "tests": ["python3", "-m", "unittest", "tests.test_unit_broker_paths", "-q"]
+    },
+    {
+      "path": "bin/broker_store.py",
+      "lang": "python",
+      "tests": ["python3", "-m", "unittest", "tests.test_unit_broker_store", "-q"]
+    },
+    {
+      "path": "bin/broker_verify.py",
+      "lang": "python",
+      "tests": ["python3", "-m", "unittest", "tests.test_unit_broker_verify", "-q"]
+    },
+    {
+      "path": "bin/backend_software.py",
+      "lang": "python",
+      "tests": ["python3", "-m", "unittest", "tests.test_unit_backend_software", "-q"],
+      "equivalent": [
+        {"line": 34, "kind": "number±1",
+         "reason": "FLAG_UP | (FLAG_UV if uv else 0) vs (… else 1): FLAG_UP == 0x01, so the else branch is UP|0 or UP|1, both == UP. No input can distinguish them."}
+      ]
+    },
+    {
+      "path": "bin/backend_token.py",
+      "lang": "python",
+      "tests": ["python3", "-m", "unittest", "tests.test_unit_backend_token", "-q"]
+    },
+    {
+      "path": "bin/broker.py",
+      "lang": "python",
+      "tests": ["python3", "-m", "unittest", "tests.test_unit_broker",
+                "tests.test_regression_broker_contract", "-q"]
+    },
+    {
+      "path": "bin/broker_server.py",
+      "lang": "python",
+      "tests": ["python3", "-m", "unittest", "tests.test_unit_broker_server",
+                "tests.test_integration_server", "-q"]
+    },
+    {
+      "path": "bin/bridge_build.py",
+      "lang": "python",
+      "tests": ["python3", "-m", "unittest", "tests.test_unit_bridge_build", "-q"]
+    },
+    {
+      "path": "userscripts/qute-passkey.js",
+      "lang": "javascript",
+      "tests": ["node", "--test", "tests/js/bridge.test.js"],
+      "equivalent": [
+        {"line": 40, "kind": "lt->le",
+         "reason": "the loop copies into a Uint8Array of exactly bin.length; the extra i == bin.length iteration writes out[i] past the end, which a typed-array integer-indexed write silently ignores. Observable output is identical."}
+      ]
+    }
+  ],
+  "exempt": [
+    {
+      "path": "bin/passkey-broker",
+      "reason": "CLI entry point: argparse wiring and console formatting; exercised end to end by tests/e2e/test_bridge_broker.sh and the integration kind"
+    },
+    {
+      "path": "bin/passkey-bridge-build",
+      "reason": "thin CLI wrapper around bin/bridge_build.py, which is the real target"
+    },
+    {
+      "path": "tools/mutator.py",
+      "reason": "vendored, byte-identical runner shared across plugins; not ours to mutate"
+    },
+    {
+      "path": "tools/policy_check.py",
+      "reason": "vendored, byte-identical checker shared across plugins; not ours to mutate"
+    }
+  ]
+}

@@ -1,0 +1,258 @@
+// Unit tests for the browser bridge userscript.
+//
+// The script runs in a page, so the only honest way to test it in node is to give it a page: a
+// fake window/navigator and a fake XMLHttpRequest, injected into a `node:vm` sandbox. That
+// exercises the real source — base64url round-trips, the clientDataJSON it builds, the broker
+// payloads it sends, and the ArrayBuffer-shaped credentials it returns — without a browser.
+//
+// Run: node --test tests/js/bridge.test.js
+'use strict';
+
+const { test } = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+const SOURCE = fs.readFileSync(
+    path.join(__dirname, '..', '..', 'userscripts', 'qute-passkey.js'), 'utf8');
+
+// A page stand-in plus a request handler the test controls. `config === null` loads the source
+// EXACTLY as it ships (with its placeholder CONFIG), which is what the default-config test wants.
+function loadBridge(config, handler) {
+    const requests = [];
+    let navigatorObj = {};
+
+    class FakeXHR {
+        constructor() { this.headers = {}; this.responseText = ''; this.status = 0; }
+        open(method, url, async) { this.method = method; this.url = url; this.async = async; }
+        setRequestHeader(name, value) { this.headers[name] = value; }
+        send(body) {
+            const req = { method: this.method, url: this.url, async: this.async,
+                          headers: this.headers, body: body ? JSON.parse(body) : null };
+            requests.push(req);
+            const reply = handler(req);
+            this.status = reply.status || 200;
+            this.responseText = JSON.stringify(reply.body);
+            if (this.onload) { this.onload(); }
+        }
+    }
+
+    const windowObj = {
+        location: { origin: 'https://example.com', hostname: 'example.com' },
+        PublicKeyCredential: function () {},
+        XMLHttpRequest: FakeXHR
+    };
+    Object.defineProperty(windowObj, 'navigator', {
+        value: navigatorObj, writable: true, configurable: true
+    });
+
+    const sandbox = {
+        window: windowObj,
+        navigator: navigatorObj,
+        XMLHttpRequest: FakeXHR,
+        btoa, atob, TextEncoder, DOMException, console,
+        Promise, Object, JSON, String, Uint8Array, ArrayBuffer, Error
+    };
+    vm.createContext(sandbox);
+    // The source reads CONFIG from its own literal; to inject a config we rewrite that one
+    // line, exactly as bin/bridge_build.py does in production. config === null keeps it as-is.
+    const source = config === null
+        ? SOURCE
+        : SOURCE.replace(/var CONFIG = \{.*?\};/, 'var CONFIG = ' + JSON.stringify(config) + ';');
+    vm.runInContext(source, sandbox, { filename: 'qute-passkey.js' });
+    return { bridge: sandbox.window.__passkeyBridge, requests,
+             navigator: sandbox.window.navigator, window: sandbox.window };
+}
+
+const CFG = { port: 12345, token: 'tok', build: 'b1' };
+
+// Objects created inside the vm carry that realm's prototypes, so assert.deepStrictEqual
+// (which compares prototypes) cannot be used across the boundary. Normalise first.
+function plain(value) { return JSON.parse(JSON.stringify(value)); }
+
+function b64uOf(api, text) {
+    return api.b64uFromBuf(new TextEncoder().encode(text));
+}
+
+test('base64url round-trips and strips padding', () => {
+    const { bridge } = loadBridge({ port: 0, token: '' }, () => ({}));
+    const raw = new Uint8Array([0, 1, 250, 251, 252, 253, 254, 255]);
+    const encoded = bridge.b64uFromBuf(raw);
+    assert.ok(!encoded.includes('='), 'no padding');
+    assert.ok(!encoded.includes('+') && !encoded.includes('/'), 'url-safe alphabet');
+    assert.deepEqual(Array.from(new Uint8Array(bridge.bufFromB64u(encoded))), Array.from(raw));
+});
+
+test('clientDataJSON has type, challenge and origin', () => {
+    const { bridge } = loadBridge({ port: 0, token: '' }, () => ({}));
+    const parsed = JSON.parse(bridge.clientDataJSON('webauthn.create', 'Y2hhbA', 'https://x'));
+    assert.deepStrictEqual(parsed,
+        { type: 'webauthn.create', challenge: 'Y2hhbA', origin: 'https://x' });
+});
+
+test('rpIdOf prefers rp.id then falls back to hostname', () => {
+    const { bridge } = loadBridge({ port: 0, token: '' }, () => ({}));
+    assert.strictEqual(bridge.rpIdOf({ rp: { id: 'a.example' } }), 'a.example');
+    assert.strictEqual(bridge.rpIdOf({}), 'example.com');
+});
+
+test('registration credential carries ArrayBuffers, not strings', () => {
+    const { bridge } = loadBridge({ port: 0, token: '' }, () => ({}));
+    const cred = bridge.toPublicKeyCredential({
+        id: 'abc', rawId: 'abc', type: 'public-key',
+        response: { clientDataJSON: 'Y2hhbA', attestationObject: 'YXR0', transports: ['usb'] }
+    });
+    assert.strictEqual(cred.id, 'abc');
+    assert.strictEqual(cred.rawId.byteLength, bridge.bufFromB64u('abc').byteLength);
+    assert.strictEqual(cred.response.clientDataJSON.byteLength,
+                       bridge.bufFromB64u('Y2hhbA').byteLength);
+    assert.deepStrictEqual(plain(cred.response.getTransports()), ['usb']);
+    assert.deepStrictEqual(plain(cred.getClientExtensionResults()), {});
+    assert.strictEqual(cred.authenticatorAttachment, 'platform');
+});
+
+test('assertion credential exposes userHandle and nulls it when absent', () => {
+    const { bridge } = loadBridge({ port: 0, token: '' }, () => ({}));
+    const withHandle = bridge.toAssertionCredential({
+        id: 'aWQ', rawId: 'aWQ', type: 'public-key',
+        response: { clientDataJSON: 'eA', authenticatorData: 'eQ', signature: 'eg', userHandle: 'dQ' }
+    });
+    assert.strictEqual(withHandle.response.userHandle.byteLength,
+                       bridge.bufFromB64u('dQ').byteLength);
+    const withoutHandle = bridge.toAssertionCredential({
+        id: 'aWQ', rawId: 'aWQ', type: 'public-key',
+        response: { clientDataJSON: 'eA', authenticatorData: 'eQ', signature: 'eg' }
+    });
+    assert.strictEqual(withoutHandle.response.userHandle, null);
+});
+
+test('create() posts the right payload and returns a credential', async () => {
+    const { bridge, requests } = loadBridge(CFG, () => ({
+        body: { ok: true, credential: {
+            id: 'cid', rawId: 'cid', type: 'public-key',
+            response: { clientDataJSON: 'Y2Q', attestationObject: 'YXR0' } } }
+    }));
+    const challenge = new Uint8Array([1, 2, 3, 4]);
+    const cred = await bridge.create({ publicKey: {
+        challenge, rp: { id: 'example.com' }, user: { id: new Uint8Array([9, 9]) } } });
+
+    assert.strictEqual(requests.length, 1);
+    const req = requests[0];
+    assert.strictEqual(req.url, 'http://127.0.0.1:' + CFG.port + '/register');
+    assert.strictEqual(req.async, true);
+    assert.strictEqual(req.headers['X-Broker-Token'], 'tok');
+    assert.strictEqual(req.body.rp_id, 'example.com');
+    assert.strictEqual(req.body.verify, true);
+    assert.strictEqual(req.body.backend, 'software');
+    // user_handle is base64url of the raw user id
+    assert.strictEqual(req.body.user_handle, bridge.b64uFromBuf(new Uint8Array([9, 9])));
+    // client_data decodes to a clientDataJSON of type webauthn.create for this origin
+    const cd = JSON.parse(new TextDecoder().decode(bridge.bufFromB64u(req.body.client_data)));
+    assert.strictEqual(cd.type, 'webauthn.create');
+    assert.strictEqual(cd.origin, 'https://example.com');
+    assert.strictEqual(cd.challenge, bridge.b64uFromBuf(challenge));
+
+    assert.strictEqual(cred.id, 'cid');
+    assert.strictEqual(cred.rawId.byteLength, bridge.bufFromB64u('cid').byteLength);
+});
+
+test('create() throws NotAllowedError when the broker refuses', async () => {
+    const { bridge } = loadBridge(CFG, () => ({ body: { ok: false, error: 'declined' } }));
+    await assert.rejects(
+        () => bridge.create({ publicKey: { challenge: new Uint8Array([1]),
+                                           rp: { id: 'example.com' } } }),
+        (e) => e.name === 'NotAllowedError');
+});
+
+test('create() rejects without publicKey', async () => {
+    const { bridge } = loadBridge(CFG, () => ({ body: {} }));
+    await assert.rejects(() => bridge.create({}),
+                         (e) => e.name === 'NotSupportedError');
+});
+
+test('get() maps allowCredentials to allow_ids and falls back to hostname', async () => {
+    const { bridge, requests } = loadBridge(CFG, () => ({
+        body: { ok: true, credential: {
+            id: 'cid', rawId: 'cid', type: 'public-key',
+            response: { clientDataJSON: 'Y2Q', authenticatorData: 'YWQ', signature: 'c2ln' } } }
+    }));
+    const cred = await bridge.get({ publicKey: {
+        challenge: new Uint8Array([7]),
+        allowCredentials: [{ id: new Uint8Array([1, 1]), type: 'public-key' }] } });
+    const req = requests[0];
+    assert.match(req.url, /\/authenticate$/);
+    assert.strictEqual(req.body.rp_id, 'example.com');            // fallback
+    assert.deepStrictEqual(req.body.allow_ids, [bridge.b64uFromBuf(new Uint8Array([1, 1]))]);
+    assert.strictEqual(cred.response.authenticatorData.byteLength,
+                       bridge.bufFromB64u('YWQ').byteLength);
+});
+
+test('get() sends null allow_ids when the page allows any credential', async () => {
+    const { bridge, requests } = loadBridge(CFG, () => ({
+        body: { ok: true, credential: {
+            id: 'eA', rawId: 'eA', type: 'public-key',
+            response: { clientDataJSON: 'YQ', authenticatorData: 'Yg', signature: 'Yw' } } }
+    }));
+    await bridge.get({ publicKey: { challenge: new Uint8Array([1]), rpId: 'rp.example' } });
+    assert.strictEqual(requests[0].body.allow_ids, null);
+    assert.strictEqual(requests[0].body.rp_id, 'rp.example');
+});
+
+test('brokerRequest rejects when no daemon is configured', async () => {
+    const { bridge } = loadBridge({ port: 0, token: '' }, () => ({}));
+    await assert.rejects(
+        () => bridge.create({ publicKey: { challenge: new Uint8Array([1]), rp: { id: 'x' } } }),
+        /not running/);
+});
+
+test('install() overrides navigator.credentials and the platform-authenticator probe', () => {
+    const { navigator } = loadBridge(CFG, () => ({}));
+    assert.strictEqual(typeof navigator.credentials.create, 'function');
+    assert.strictEqual(typeof navigator.credentials.get, 'function');
+    // the statics were installed on the sandbox's PublicKeyCredential
+    const { bridge } = loadBridge(CFG, () => ({}));
+    assert.strictEqual(typeof bridge.install, 'function');
+});
+
+test('install() returns false without a port', () => {
+    const { bridge } = loadBridge({ port: 0, token: '' }, () => ({}));
+    assert.strictEqual(bridge.install(), false);
+});
+
+test('a page calling navigator.credentials.create is intercepted', async () => {
+    const { navigator } = loadBridge(CFG, () => ({
+        body: { ok: true, credential: {
+            id: 'cid', rawId: 'cid', type: 'public-key',
+            response: { clientDataJSON: 'Y2Q', attestationObject: 'YXR0' } } }
+    }));
+    const cred = await navigator.credentials.create({ publicKey: {
+        challenge: new Uint8Array([1, 2]), rp: { id: 'example.com' } } });
+    assert.strictEqual(cred.id, 'cid');
+});
+
+test('a credential without a type falls back to public-key', () => {
+    const { bridge } = loadBridge({ port: 0, token: '' }, () => ({}));
+    const cred = bridge.toPublicKeyCredential({
+        id: 'aWQ', rawId: 'aWQ',
+        response: { clientDataJSON: 'eA', attestationObject: 'eg' } });
+    assert.strictEqual(cred.type, 'public-key');
+    const assertion = bridge.toAssertionCredential({
+        id: 'aWQ', rawId: 'aWQ',
+        response: { clientDataJSON: 'eA', authenticatorData: 'eQ', signature: 'eg' } });
+    assert.strictEqual(assertion.type, 'public-key');
+});
+
+test('the shipped default config has port 0 and disables the bridge', () => {
+    const { bridge } = loadBridge(null, () => ({}));    // source exactly as shipped
+    assert.strictEqual(bridge.CONFIG.port, 0);
+    assert.strictEqual(bridge.install(), false);        // no port -> refuses to install
+});
+
+test('the platform-authenticator probes are answered', async () => {
+    const { window } = loadBridge(CFG, () => ({}));
+    assert.strictEqual(await window.PublicKeyCredential
+        .isUserVerifyingPlatformAuthenticatorAvailable(), true);
+    assert.strictEqual(await window.PublicKeyCredential
+        .isConditionalMediationAvailable(), false);
+});

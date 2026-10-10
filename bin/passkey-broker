@@ -1,0 +1,337 @@
+#!/usr/bin/env python3
+"""passkey-broker — a system-wide WebAuthn authenticator for Omarchy.
+
+Commands:
+
+  info          report the token's and the machine's real capabilities (measured, not assumed)
+  serve         run the loopback daemon a browser bridge talks to
+  register      create a credential (software or token backend) for a relying party
+  authenticate  produce an assertion for an existing credential
+  list          list stored credentials
+  delete        remove a credential
+  status        report whether a daemon is running, and which build
+
+Every capability is measured from the device, never assumed — the whole premise of this
+component is that the platform's WebAuthn story is untrustworthy, so it must not repeat that
+mistake.
+"""
+import argparse
+import base64
+import ctypes
+import ctypes.util
+import glob
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import broker_paths                                    # noqa: E402
+import webauthn_core as w                              # noqa: E402
+
+TOKEN_HINTS = ("yubico", "fido", "security key", "hid")
+
+
+def find_token():
+    """Return ((path, name), ...) for attached FIDO2-capable HID devices.
+
+    Read from /sys rather than lsusb: the hidraw node is what libfido2 actually opens,
+    and its HID_NAME is what identifies the device.
+    """
+    found = []
+    for node in sorted(glob.glob("/sys/class/hidraw/hidraw*")):
+        uevent = os.path.join(node, "device", "uevent")
+        try:
+            with open(uevent, encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        m = re.search(r"HID_NAME=(.*)", text)
+        name = (m.group(1).strip() if m else "")
+        if any(h in name.lower() for h in TOKEN_HINTS):
+            found.append(("/dev/" + os.path.basename(node), name))
+    return found
+
+
+def token_info(path):
+    """Parse `fido2-token -I` into a dict of the capabilities that decide what is possible."""
+    try:
+        out = subprocess.run(["fido2-token", "-I", path], capture_output=True, text=True,
+                             timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"error": str(exc)}
+    if out.returncode != 0:
+        return {"error": (out.stderr or out.stdout).strip() or "fido2-token failed"}
+    info = {}
+    for line in out.stdout.splitlines():
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        key, value = key.strip(), value.strip()
+        if key == "options":
+            info["options"] = [o.strip() for o in value.split(",") if o.strip()]
+        elif key == "algorithms":
+            info["algorithms"] = re.findall(r"(\w+) \(public-key\)", value)
+        elif key in ("version strings", "transport strings", "extension strings"):
+            info[key.split()[0]] = [v.strip() for v in value.split(",") if v.strip()]
+        else:
+            info[key] = value
+    # The two capabilities the broker's design depends on.
+    info["ctap2"] = info.get("proto") == "0x02"
+    info["stores_passkeys"] = "rk" in info.get("options", [])
+    info["users_verification"] = "uv" in info.get("options", [])
+    return info
+
+
+def libfido2_version():
+    """libfido2 is what actually talks to the hardware; report its presence honestly."""
+    name = ctypes.util.find_library("fido2")
+    if not name:
+        return None
+    try:
+        lib = ctypes.CDLL(name)
+        lib.fido_version.argtypes = []
+        lib.fido_version.restype = ctypes.c_char_p
+        return lib.fido_version().decode()
+    except Exception:
+        return "present (version unavailable)"
+
+
+# ── commands ─────────────────────────────────────────────────────────────────
+
+def cmd_info(args):
+    report = {"libfido2": libfido2_version(), "tokens": []}
+    if not report["libfido2"]:
+        report["error"] = "libfido2 not found — install: omarchy pkg add libfido2"
+    for path, name in find_token():
+        report["tokens"].append({"path": path, "name": name, "info": token_info(path)})
+    if not report["tokens"]:
+        report.setdefault("error", "no FIDO2-capable HID device attached")
+    usb = "uv" in (report.get("tokens") or [{}])[0].get("info", {}).get("options", [])
+    creds = None
+    try:
+        fps = subprocess.run(["fprintd-list", os.environ.get("USER") or ""],
+                             capture_output=True, text=True, timeout=15)
+        creds = len(re.findall(r"^ - #\d+", fps.stdout, re.M)) or None
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    report["verification"] = {"fprintd_enrolled": creds,
+                              "token_has_uv": bool(usb)}
+    if args.json:
+        print(json.dumps(report, indent=2))
+        return 0
+    print("passkey-broker: capability report")
+    print("  libfido2        : %s" % report["libfido2"])
+    for t in report["tokens"]:
+        i = t["info"]
+        print("  token           : %s (%s)" % (t["name"], t["path"]))
+        print("    ctap2         : %s" % ("yes" if i.get("ctap2") else "no"))
+        print("    stores passkeys (rk): %s" % ("yes" if i.get("stores_passkeys") else "no"))
+        print("    algorithms    : %s" % ", ".join(i.get("algorithms", [])))
+        print("    max creds     : %s" % i.get("maxcredcntlst", "?"))
+    print("  fingerprint     : enrolled fingers: %s" % report["verification"]["fprintd_enrolled"])
+    if report.get("error"):
+        print("  warning         : %s" % report["error"])
+    return 0
+
+
+def _make_broker(verifier=None):
+    """Build a broker. A NullVerifier is only ever used by the CLI's ``--no-verify`` path or by
+    a test; the daemon's default is the real fingerprint gate."""
+    from broker import PasskeyBroker
+    from broker_verify import FprintdVerifier
+    return PasskeyBroker(verifier=verifier or FprintdVerifier())
+
+
+def _client_data(origin, challenge_b64u, typ):
+    return w.b64u_encode(w.client_data(typ, challenge_b64u, origin))
+
+
+def cmd_register(args):
+    broker = _make_broker(verifier=None if args.verify else _null_verifier())
+    client_data = args.client_data or _client_data(args.origin, args.challenge, "webauthn.create")
+    result = broker.register(args.rp_id, client_data, args.user_handle or "", args.backend,
+                             verify=args.verify)
+    return _finish(result, args, "registered")
+
+
+def cmd_authenticate(args):
+    broker = _make_broker(verifier=None if args.verify else _null_verifier())
+    client_data = args.client_data or _client_data(args.origin, args.challenge, "webauthn.get")
+    allow = args.allow or None
+    result = broker.authenticate(args.rp_id, client_data, allow, verify=args.verify)
+    return _finish(result, args, "asserted")
+
+
+def _finish(result, args, verb):
+    if args.json:
+        print(json.dumps(result, indent=2))
+    elif result.get("ok"):
+        print("passkey-broker: %s (%s backend)" % (verb, result.get("backend")))
+        cred = result["credential"]
+        print("  credential id : %s" % cred["id"])
+        print("  user verified : %s" % result.get("user_verified"))
+    else:
+        print("passkey-broker: FAILED — %s %s" % (result.get("error"),
+                                                  result.get("detail", "")), file=sys.stderr)
+    return 0 if result.get("ok") else 1
+
+
+def _null_verifier():
+    from broker_verify import NullVerifier
+    return NullVerifier(True)
+
+
+def cmd_list(args):
+    broker = _make_broker(verifier=_null_verifier())
+    creds = broker.list_credentials()
+    if args.json:
+        print(json.dumps(creds, indent=2))
+        return 0
+    if not creds:
+        print("passkey-broker: no stored credentials")
+        return 0
+    for c in creds:
+        print("%s  %-20s %-8s sign_count=%s" % (c["cred_id"], c["rp_id"], c["backend"],
+                                                c["sign_count"]))
+    return 0
+
+
+def cmd_delete(args):
+    broker = _make_broker(verifier=_null_verifier())
+    result = broker.delete(args.cred_id)
+    print("passkey-broker: %s" % ("deleted" if result["ok"] else "not found"))
+    return 0 if result["ok"] else 1
+
+
+def cmd_serve(args):
+    from broker import PasskeyBroker
+    from broker_server import BrokerServer
+    from broker_verify import FprintdVerifier, NullVerifier
+    # --no-verify disables the fingerprint gate. It exists for headless tests and would be a
+    # dangerous default, so it is an explicit flag and it is named for what it does.
+    verifier = NullVerifier(True) if args.no_verify else FprintdVerifier()
+    broker = PasskeyBroker(verifier=verifier)
+    server = BrokerServer(broker, port=args.port)
+    port = server.start()
+    _install_bridge()
+    print("passkey-broker: listening on http://127.0.0.1:%d (build %s)" % (port, server.build))
+    print("  token   : %s" % broker_paths.token_path())
+    print("  state   : %s" % broker_paths.state_dir())
+    if args.once:
+        return 0
+    try:
+        import time
+        while True:
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        server.stop()
+    return 0
+
+
+def cmd_status(args):
+    path = broker_paths.server_json_path()
+    report = {"running": False}
+    if path.exists():
+        try:
+            info = json.loads(path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            info = None
+        if info:
+            report.update(info)
+            report["running"] = _health(info.get("port"))
+    if args.json:
+        print(json.dumps(report, indent=2))
+        return 0
+    if report["running"]:
+        print("passkey-broker: running on port %s (build %s)" % (report.get("port"),
+                                                                 report.get("build")))
+    else:
+        print("passkey-broker: not running")
+    return 0 if report["running"] else 1
+
+
+def _install_bridge():
+    """Render+install the userscript bridge with the live port/token. Best effort: a daemon
+    that cannot install the bridge still serves, it simply has no in-page client yet."""
+    try:
+        import bridge_build
+        _, installed = bridge_build.install_live()
+        for p in installed:
+            print("  bridge  : %s" % p)
+    except Exception as exc:                       # pragma: no cover - best effort
+        print("  bridge  : not installed (%s)" % exc)
+
+
+def _health(port):
+    if not port:
+        return False
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:%d/health" % port, timeout=2) as r:
+            return json.loads(r.read().decode()).get("ok", False)
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+
+
+# ── argparse ─────────────────────────────────────────────────────────────────
+
+def build_parser():
+    p = argparse.ArgumentParser(prog="passkey-broker", description=__doc__.splitlines()[0])
+    sub = p.add_subparsers(dest="cmd")
+
+    info = sub.add_parser("info", help="report token and verification capabilities")
+    info.add_argument("--json", action="store_true")
+    info.set_defaults(func=cmd_info)
+
+    serve = sub.add_parser("serve", help="run the loopback daemon")
+    serve.add_argument("--port", type=int, default=0)
+    serve.add_argument("--once", action="store_true", help="bind, report, and exit")
+    serve.add_argument("--no-verify", dest="no_verify", action="store_true",
+                       help="disable the fingerprint gate (headless tests only)")
+    serve.set_defaults(func=cmd_serve)
+
+    for name, func, verb, typ in (("register", cmd_register, "registered", "webauthn.create"),
+                                  ("authenticate", cmd_authenticate, "asserted", "webauthn.get")):
+        sp = sub.add_parser(name, help="%s a credential" % verb)
+        sp.add_argument("--rp-id", required=True)
+        sp.add_argument("--origin", default="https://localhost")
+        sp.add_argument("--challenge", default=w.b64u_encode(b"cli-challenge"))
+        sp.add_argument("--client-data", help="base64url clientDataJSON (overrides origin/challenge)")
+        sp.add_argument("--backend", default="software", choices=["software", "token"])
+        sp.add_argument("--no-verify", dest="verify", action="store_false")
+        sp.add_argument("--json", action="store_true")
+        if name == "register":
+            sp.add_argument("--user-handle", default="")
+        else:
+            sp.add_argument("--allow", action="append", help="allowed credential id (repeatable)")
+        sp.set_defaults(func=func)
+
+    lst = sub.add_parser("list", help="list stored credentials")
+    lst.add_argument("--json", action="store_true")
+    lst.set_defaults(func=cmd_list)
+
+    dele = sub.add_parser("delete", help="delete a credential")
+    dele.add_argument("cred_id")
+    dele.set_defaults(func=cmd_delete)
+
+    stat = sub.add_parser("status", help="is a daemon running?")
+    stat.add_argument("--json", action="store_true")
+    stat.set_defaults(func=cmd_status)
+    return p
+
+
+def main(argv=None):
+    p = build_parser()
+    args = p.parse_args(argv if argv is not None else sys.argv[1:])
+    if not getattr(args, "func", None):
+        p.print_help()
+        return 2
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

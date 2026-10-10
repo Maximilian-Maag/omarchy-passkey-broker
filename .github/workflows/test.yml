@@ -1,0 +1,32 @@
+name: tests
+
+# Policy as code runs here too, as part of the full suite: every test kind the plugin promises
+# (unit, regression, integration, e2e, js) plus mutation testing.
+on:
+  push:
+  pull_request:
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # the policy check diffs against the base branch
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      # cryptography and fido2 are RUNTIME dependencies: the broker builds real ES256
+      # signatures and speaks CTAP2 with them. Without them the software backend's tests would
+      # skip and the mutation score would collapse — the same trap as a missing PyNaCl
+      # elsewhere. Installing them is what makes the numbers mean anything.
+      - name: Install runtime dependencies (cryptography, fido2)
+        run: python3 -m pip install --quiet cryptography fido2
+
+      - name: All test kinds (policy, unit, regression, integration, e2e, js, mutation)
+        run: bash tools/run_tests.sh
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"

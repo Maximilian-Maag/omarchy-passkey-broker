@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "Maximilian-Maag.passkey-broker",
+  "name": "Passkey Broker",
+  "version": "1.0.0",
+  "author": "Maximilian-Maag",
+  "license": "MIT",
+  "description": "A system-wide WebAuthn authenticator for Omarchy. QtWebEngine advertises passkeys and provides no authenticator behind them, so this broker answers the ceremony itself \u2014 a FIDO2 security key where one is attached, or a fingerprint-gated software key otherwise \u2014 and a qutebrowser bridge hands the result to the page.",
+  "kinds": [
+    "cli"
+  ],
+  "activation": "auto",
+  "entryPoints": {},
+  "omarchy_meta": {
+    "installScript": "install.sh",
+    "hooks": [],
+    "features": [
+      "System-wide WebAuthn/passkey authenticator served over a token-gated loopback API",
+      "Hardware token backend (CTAP2 via libfido2): the private key never leaves the security key",
+      "Software ES256 backend gated by fprintd, for when no key is attached",
+      "qutebrowser Greasemonkey bridge that replaces navigator.credentials.create/get (and the platform-authenticator probe)",
+      "Unit + regression + integration + e2e + JS tests, mutation testing (>= 0.80) and policy as code"
+    ]
+  }
+}

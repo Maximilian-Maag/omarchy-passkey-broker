@@ -7,11 +7,11 @@ A system-wide passkey (WebAuthn) authenticator for Omarchy.
 QtWebEngine **advertises** WebAuthn and provides no authenticator behind it: a probe shows
 `PublicKeyCredential` as a function, `credentials.create()` as a function, and the ceremony
 **never settles** — it hangs forever. `isUserVerifyingPlatformAuthenticatorAvailable()`
-resolves `false`. So every Chromium-based app on this machine (qutebrowser, Electron apps,
+resolves `false`. So every Chromium-based app on such a system (qutebrowser, Electron apps,
 anything embedded) has no way to run a WebAuthn ceremony. That is not a qutebrowser bug; it is
 a missing system capability, which is why the fix belongs here rather than in one browser.
 
-## Verified capability on this machine
+## What the hardware has to provide
 
     fido2-token -I /dev/hidraw1
       proto: 0x02 (CTAP2)      algorithms: es256, eddsa
@@ -19,8 +19,9 @@ a missing system capability, which is why the fix belongs here rather than in on
       version strings: U2F_V2, FIDO_2_0, FIDO_2_1_PRE
 
 `rk` = resident keys, i.e. the token can store passkeys. ES256 is WebAuthn's default
-algorithm. fprintd is installed with `right-index-finger` enrolled. Both backends are
-physically viable; nothing here is theoretical.
+algorithm. For the software backend, fprintd needs at least one enrolled fingerprint (a
+"Security Key by Yubico" is used as the reference token). Both backends are physically viable;
+nothing here is theoretical.
 
 ## Scope, and the one wall
 
@@ -53,7 +54,7 @@ the broker.
 - The software backend keeps its private key on disk, so **possession of the file is not
   enough** — a live fingerprint check gates every use. `--no-verify` exists for headless tests
   and clears the UV flag, so an unverified credential is visible to the relying party.
-- A fingerprint-gated software authenticator means anyone who can pass the fingerprint on this
+- A fingerprint-gated software authenticator means anyone who can pass the fingerprint on the
   machine can sign in. That is the right trade for a laptop (it is what Windows Hello does) and
   it is a *different* thing from a synced passkey.
 - `fmt: "none"` means a relying party cannot distinguish a software authenticator from a

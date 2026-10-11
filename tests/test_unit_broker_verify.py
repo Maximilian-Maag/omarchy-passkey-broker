@@ -35,13 +35,13 @@ class FprintdStates(unittest.TestCase):
         broker_verify.shutil.which = self._which
 
     def test_pass_is_verified(self):
-        v = FprintdVerifier(username="mmaag", runner=Runner(0, "verify-match"))
+        v = FprintdVerifier(username="alice", runner=Runner(0, "verify-match"))
         r = v.verify()
         self.assertTrue(r.ok)
         self.assertEqual(r.state, "verified")
 
     def test_exit_one_is_declined(self):
-        v = FprintdVerifier(username="mmaag", runner=Runner(1, "", "verify-no-match"))
+        v = FprintdVerifier(username="alice", runner=Runner(1, "", "verify-no-match"))
         r = v.verify()
         self.assertFalse(r.ok)
         self.assertEqual(r.state, "declined")

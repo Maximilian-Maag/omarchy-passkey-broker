@@ -16,11 +16,26 @@ from _isolation import isolate  # noqa: E402
 
 setUpModule, tearDownModule = isolate()
 import webauthn_core as w  # noqa: E402
+from backend_software import SoftwareBackend  # noqa: E402
+from backend_token import TokenBackend  # noqa: E402
 from broker import PasskeyBroker  # noqa: E402
 from broker_store import CredentialStore  # noqa: E402
 from broker_verify import NullVerifier  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric import ec  # noqa: E402
 from fido2 import cbor  # noqa: E402
+
+
+def no_key_broker(store, verifier=None):
+    """A broker with real backends whose TOKEN reports no attached key.
+
+    Without this the broker's "prefer a security key" default would send these ceremonies to
+    whatever is plugged into the machine running the tests — making them hardware-dependent.
+    """
+    token = TokenBackend()
+    token.available = lambda: False
+    return PasskeyBroker(store=store,
+                         verifier=verifier if verifier is not None else NullVerifier(True),
+                         backends={"software": SoftwareBackend(), "token": token})
 
 
 def cose_to_public_key(att_obj):
@@ -34,8 +49,7 @@ def cose_to_public_key(att_obj):
 
 class Ceremony(unittest.TestCase):
     def setUp(self):
-        self.broker = PasskeyBroker(store=CredentialStore(pathlib.Path(tempfile.mkdtemp())),
-                                    verifier=NullVerifier(True))
+        self.broker = no_key_broker(CredentialStore(pathlib.Path(tempfile.mkdtemp())))
 
     def client_data(self, typ, challenge=b"challenge-bytes", rp="example.com"):
         return w.client_data(typ, w.b64u_encode(challenge), "https://%s" % rp)

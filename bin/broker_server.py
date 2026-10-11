@@ -205,7 +205,7 @@ class BrokerServer:
         return {
             "/register": lambda b: broker.register(
                 b.get("rp_id", ""), b.get("client_data", ""),
-                b.get("user_handle", "") or "", b.get("backend", "software"),
+                b.get("user_handle", "") or "", b.get("backend") or None,
                 bool(b.get("verify", True))),
             "/authenticate": lambda b: broker.authenticate(
                 b.get("rp_id", ""), b.get("client_data", ""),

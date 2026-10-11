@@ -154,7 +154,8 @@ def _client_data(origin, challenge_b64u, typ):
 def cmd_register(args):
     broker = _make_broker(verifier=None if args.verify else _null_verifier())
     client_data = args.client_data or _client_data(args.origin, args.challenge, "webauthn.create")
-    result = broker.register(args.rp_id, client_data, args.user_handle or "", args.backend,
+    backend = None if args.backend == "auto" else args.backend
+    result = broker.register(args.rp_id, client_data, args.user_handle or "", backend,
                              verify=args.verify)
     return _finish(result, args, "registered")
 
@@ -332,7 +333,8 @@ def build_parser():
         sp.add_argument("--origin", default="https://localhost")
         sp.add_argument("--challenge", default=w.b64u_encode(b"cli-challenge"))
         sp.add_argument("--client-data", help="base64url clientDataJSON (overrides origin/challenge)")
-        sp.add_argument("--backend", default="software", choices=["software", "token"])
+        sp.add_argument("--backend", default="auto", choices=["auto", "software", "token"],
+                        help="auto prefers an attached security key over the software key")
         sp.add_argument("--no-verify", dest="verify", action="store_false")
         sp.add_argument("--json", action="store_true")
         if name == "register":

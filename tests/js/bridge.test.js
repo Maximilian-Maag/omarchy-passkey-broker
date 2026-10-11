@@ -165,7 +165,10 @@ test('create() posts the right payload and returns a credential', async () => {
     assert.strictEqual(req.headers['X-Broker-Token'], 'tok');
     assert.strictEqual(req.body.rp_id, 'example.com');
     assert.strictEqual(req.body.verify, true);
-    assert.strictEqual(req.body.backend, 'software');
+    // NO `backend` field: the daemon chooses (a security key when attached, else the software
+    // key). Sending 'software' here forced every browser ceremony through the fingerprint gate,
+    // which a machine whose sensor cannot be used can never satisfy.
+    assert.strictEqual('backend' in req.body, false);
     // user_handle is base64url of the raw user id
     assert.strictEqual(req.body.user_handle, bridge.b64uFromBuf(new Uint8Array([9, 9])));
     // client_data decodes to a clientDataJSON of type webauthn.create for this origin

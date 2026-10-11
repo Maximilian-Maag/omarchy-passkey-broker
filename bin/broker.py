@@ -61,6 +61,26 @@ class PasskeyBroker:
             raise KeyError("no such backend: %r" % (name,))
         return be
 
+    def preferred_backend(self):
+        """Which backend a ceremony should use when the caller does not insist.
+
+        The token wins whenever a security key is attached: its private key never leaves the
+        hardware, and — the failure that actually bit — the SOFTWARE backend is gated by the
+        local fingerprint, which a machine whose sensor the owner cannot use can never satisfy.
+        Defaulting, or pinning, "software" therefore made every passkey ceremony from the
+        browser fail on exactly such a machine, even with a key plugged in.
+
+        ``PASSKEY_BROKER_BACKEND=software|token`` forces the choice (used by the e2e, and
+        available to anyone who would rather not have a plugged-in key take over).
+        """
+        forced = (os.environ.get("PASSKEY_BROKER_BACKEND") or "").strip().lower()
+        if forced in ("software", "token"):
+            return forced
+        token = self.backends.get("token")
+        if token is not None and getattr(token, "available", lambda: False)():
+            return "token"
+        return "software"
+
     def _decide_uv(self, verify, backend=None):
         """Run user verification when asked. Returns (ok, VerifyResult).
 
@@ -83,8 +103,11 @@ class PasskeyBroker:
 
     # ── operations ───────────────────────────────────────────────────────────
 
-    def register(self, rp_id, client_data_b64u, user_handle_b64u="", backend="software",
+    def register(self, rp_id, client_data_b64u, user_handle_b64u="", backend=None,
                  verify=True):
+        """Register a credential. ``backend=None`` means "pick the best available one" — see
+        preferred_backend(): a security key when one is attached, else the software key."""
+        backend = backend or self.preferred_backend()
         if not rp_id or not isinstance(rp_id, str):
             return {"ok": False, "error": "invalid_rp_id"}
         try:

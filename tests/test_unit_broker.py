@@ -313,5 +313,46 @@ class BackendAwareVerification(unittest.TestCase):
         self.assertFalse(r["user_verified"], "an opt-out must not look verified")
 
 
+class BackendPreference(unittest.TestCase):
+    """Which backend a ceremony uses when the caller does not insist.
+
+    This is the bug that made passkeys fail with a security key attached: the browser bridge
+    pinned 'software', whose gate is the LOCAL fingerprint — unsatisfiable on a machine whose
+    sensor the owner cannot use. The preference must therefore be "key first".
+    """
+
+    def test_prefers_the_token_when_a_key_is_attached(self):
+        tok = StubBackend("token")
+        tok.available = lambda: True
+        self.assertEqual(broker(backends={"token": tok}).preferred_backend(), "token")
+
+    def test_falls_back_to_software_without_a_key(self):
+        tok = StubBackend("token")
+        tok.available = lambda: False
+        self.assertEqual(broker(backends={"token": tok}).preferred_backend(), "software")
+
+    def test_falls_back_to_software_without_a_token_backend(self):
+        self.assertEqual(broker(backends={}).preferred_backend(), "software")
+
+    def test_a_backend_without_an_available_probe_is_not_preferred(self):
+        # StubBackend has no `available`; it must not be mistaken for an attached key
+        self.assertEqual(broker().preferred_backend(), "software")
+
+    def test_register_without_a_backend_uses_the_preference(self):
+        tok = StubBackend("token", self_verifies=True)
+        tok.available = lambda: True
+        b = broker(backends={"software": StubBackend("software"), "token": tok})
+        r = b.register("example.com", CD)
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["backend"], "token", "an attached key must win over software")
+
+    def test_an_explicit_backend_still_overrides_the_preference(self):
+        tok = StubBackend("token", self_verifies=True)
+        tok.available = lambda: True
+        b = broker(backends={"software": StubBackend("software"), "token": tok})
+        self.assertEqual(b.register("example.com", CD, backend="software")["backend"],
+                         "software")
+
+
 if __name__ == "__main__":
     unittest.main()

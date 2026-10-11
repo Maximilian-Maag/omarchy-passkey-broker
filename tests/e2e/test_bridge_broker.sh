@@ -33,6 +33,9 @@ trap cleanup EXIT
 fail() { echo "FAIL: $*"; exit 1; }
 
 # --no-verify is the headless test hook; the fingerprint gate is exercised elsewhere.
+# PASSKEY_BROKER_BACKEND pins the software backend: the bridge sends no backend (the daemon
+# picks), and "pick the best" means an attached security key — which would need a real touch.
+PASSKEY_BROKER_BACKEND=software \
 "$PY" "$REPO/bin/passkey-broker" serve --no-verify >"$XDG_STATE_HOME/serve.log" 2>&1 &
 SRV=$!
 

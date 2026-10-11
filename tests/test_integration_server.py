@@ -20,6 +20,8 @@ from _isolation import isolate  # noqa: E402
 
 setUpModule, tearDownModule = isolate()
 import webauthn_core as w  # noqa: E402
+from backend_software import SoftwareBackend  # noqa: E402
+from backend_token import TokenBackend  # noqa: E402
 from broker import PasskeyBroker  # noqa: E402
 from broker_server import BrokerServer  # noqa: E402
 from broker_store import CredentialStore  # noqa: E402
@@ -31,7 +33,13 @@ TOKEN = "integration-test-token"
 class ServerCase(unittest.TestCase):
     def setUp(self):
         self.store = CredentialStore(pathlib.Path(tempfile.mkdtemp()))
-        self.broker = PasskeyBroker(store=self.store, verifier=NullVerifier(True))
+        # Real backends, but the token reports NO attached key. Otherwise the broker's
+        # "prefer a security key" default would make these transport tests depend on whatever
+        # happens to be plugged into the machine running them.
+        token = TokenBackend()
+        token.available = lambda: False
+        self.broker = PasskeyBroker(store=self.store, verifier=NullVerifier(True),
+                                    backends={"software": SoftwareBackend(), "token": token})
         self.server = BrokerServer(self.broker, token=TOKEN)
         self.server.start()
         self.base = "http://127.0.0.1:%d" % self.server.port

@@ -7,10 +7,12 @@ python-fido2 data classes (AttestedCredentialData / AuthenticatorData) so the sh
 the hardware actually returns, rather than from ad-hoc dicts that would let a real mismatch
 through.
 """
+import builtins
 import hashlib
 import pathlib
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "bin"))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))  # tests/ (for _isolation)
@@ -504,6 +506,45 @@ class VerificationContract(unittest.TestCase):
 
     def test_the_token_verifies_itself(self):
         self.assertTrue(TokenBackend().self_verifies)
+
+
+class Availability(unittest.TestCase):
+    """``available()`` decides whether a browser ceremony is sent to the KEY. Getting it wrong in
+    either direction breaks the user: claiming a key that is not there fails the ceremony, and
+    missing one that IS attached sends them to the fingerprint gate they cannot satisfy."""
+
+    def test_true_when_a_key_was_injected(self):
+        self.assertTrue(TokenBackend(ctap=object()).available())
+
+    def test_true_when_a_device_is_attached(self):
+        from fido2.hid import CtapHidDevice
+        with mock.patch.object(CtapHidDevice, "list_devices", staticmethod(lambda: [object()])):
+            self.assertTrue(TokenBackend().available())
+
+    def test_false_when_no_device_is_attached(self):
+        from fido2.hid import CtapHidDevice
+        with mock.patch.object(CtapHidDevice, "list_devices", staticmethod(lambda: [])):
+            self.assertFalse(TokenBackend().available())
+
+    def test_false_when_the_device_list_errors(self):
+        from fido2.hid import CtapHidDevice
+
+        def boom():
+            raise OSError("no hidraw")
+
+        with mock.patch.object(CtapHidDevice, "list_devices", staticmethod(boom)):
+            self.assertFalse(TokenBackend().available())
+
+    def test_false_when_fido2_is_not_installed(self):
+        real_import = builtins.__import__
+
+        def fake(name, *args, **kwargs):
+            if name == "fido2.hid":
+                raise ImportError("python-fido2 is not installed")
+            return real_import(name, *args, **kwargs)
+
+        with mock.patch.object(builtins, "__import__", fake):
+            self.assertFalse(TokenBackend().available())
 
 
 if __name__ == "__main__":

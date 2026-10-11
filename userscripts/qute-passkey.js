@@ -126,11 +126,15 @@
             if (!pk) { throw new DOMException('publicKey required', 'NotSupportedError'); }
             var cd = clientDataJSON('webauthn.create', b64uFromBuf(pk.challenge),
                                     window.location.origin);
+            // NO `backend` field on purpose: the daemon picks the best available one — a
+            // security key when attached, else the software key. Pinning 'software' here sent
+            // EVERY browser ceremony to the fingerprint-gated backend, which a machine whose
+            // sensor the owner cannot use can never satisfy, so passkeys failed with a key
+            // plugged in and nothing to do with the key.
             return brokerRequest('/register', {
                 rp_id: rpIdOf(pk),
                 client_data: b64uFromBuf(new TextEncoder().encode(cd)),
                 user_handle: pk.user && pk.user.id ? b64uFromBuf(pk.user.id) : '',
-                backend: 'software',
                 verify: true
             });
         }).then(function (res) {

@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.2.1
+
+### Fixed
+- **Passkeys still failed with a security key attached — the browser asked for the wrong
+  backend.** The bridge pinned `backend: 'software'` on every registration, so each browser
+  ceremony went to the fingerprint-gated software backend, which a machine whose sensor the owner
+  cannot use can never satisfy. The YubiKey was never consulted, which is why 1.2.0's token fix
+  alone changed nothing in the browser. The bridge now sends **no** `backend` and the daemon
+  chooses: a security key when one is attached, else the software key.
+
+### Added
+- `PasskeyBroker.preferred_backend()` and `TokenBackend.available()` — the key wins over a key on
+  disk. `passkey-broker register/authenticate --backend` accepts `auto` (now the default), meaning
+  the same thing; `--backend software|token` still forces a choice.
+
 ## 1.2.0
 
 ### Fixed

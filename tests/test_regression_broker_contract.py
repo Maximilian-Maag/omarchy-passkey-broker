@@ -19,10 +19,25 @@ from _isolation import isolate  # noqa: E402
 
 setUpModule, tearDownModule = isolate()
 import webauthn_core as w  # noqa: E402
+from backend_software import SoftwareBackend  # noqa: E402
+from backend_token import TokenBackend  # noqa: E402
 from broker import PasskeyBroker  # noqa: E402
 from broker_server import BrokerServer  # noqa: E402
 from broker_store import CredentialStore  # noqa: E402
 from broker_verify import NullVerifier  # noqa: E402
+
+
+def no_key_broker(store, verifier=None):
+    """A broker with real backends whose TOKEN reports no attached key.
+
+    Without this the broker's "prefer a security key" default would send these ceremonies to
+    whatever is plugged into the machine running the tests — making them hardware-dependent.
+    """
+    token = TokenBackend()
+    token.available = lambda: False
+    return PasskeyBroker(store=store,
+                         verifier=verifier if verifier is not None else NullVerifier(True),
+                         backends={"software": SoftwareBackend(), "token": token})
 
 CD = w.b64u_encode(w.client_data("webauthn.create", "Y2hhbGxlbmdl", "https://example.com"))
 
@@ -30,7 +45,7 @@ CD = w.b64u_encode(w.client_data("webauthn.create", "Y2hhbGxlbmdl", "https://exa
 class PrivateKeyNeverExposed(unittest.TestCase):
     def setUp(self):
         self.dir = pathlib.Path(tempfile.mkdtemp())
-        self.broker = PasskeyBroker(store=CredentialStore(self.dir), verifier=NullVerifier(True))
+        self.broker = no_key_broker(CredentialStore(self.dir))
 
     def test_credential_file_is_0600(self):
         self.broker.register("example.com", CD)
@@ -61,7 +76,7 @@ class PrivateKeyNeverExposed(unittest.TestCase):
 class DeclinedNeverPersists(unittest.TestCase):
     def test_no_credential_after_decline(self):
         store = CredentialStore(pathlib.Path(tempfile.mkdtemp()))
-        broker = PasskeyBroker(store=store, verifier=NullVerifier(False))
+        broker = no_key_broker(store, verifier=NullVerifier(False))
         result = broker.register("example.com", CD)
         self.assertFalse(result["ok"])
         self.assertEqual(store.list(), [])

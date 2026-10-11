@@ -61,6 +61,24 @@ class TokenBackend:
         self._injected = ctap
         self._pin = pin
 
+    def available(self):
+        """Is a usable security key attached? (An injected one counts, for tests.)
+
+        Used to pick the backend for a browser ceremony. A token beats a key on disk, and — the
+        part that actually bit — the software backend is gated by the LOCAL fingerprint, which a
+        machine whose sensor the owner cannot use can never satisfy.
+        """
+        if self._injected is not None:
+            return True
+        try:
+            from fido2.hid import CtapHidDevice
+        except ImportError:
+            return False
+        try:
+            return bool(list(CtapHidDevice.list_devices()))
+        except Exception:
+            return False
+
     @contextlib.contextmanager
     def _ctap(self):
         """Yield a Ctap2 object. An injected object (tests) is yielded as-is; otherwise the

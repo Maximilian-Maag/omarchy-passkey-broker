@@ -12,8 +12,10 @@ Two facts have to hold at once:
   * **Registration must work.** The bridge has to be present on a site we hold NOTHING for, or a
     brand-new passkey could never be created (the daemon would answer "no credential" for the
     very site you are trying to register on). So "install" cannot mean "a credential exists".
-  * **Some hosts must never be touched.** Google's sign-in is refused the moment the API is
-    overridden, so those hosts are blocked and the bridge stays out of the way entirely.
+  * **Some hosts can be blocked.** A host that misbehaves on your machine can be kept out of the
+    bridge entirely with ``passkey-broker block <host>``. Nothing is blocked by default: passkeys
+    are needed on exactly the sign-in hosts that used to be on that list, and the override is now
+    installed in a shape a page cannot detect (see the bridge's swapMethod).
 
 Hence: ``install`` is a property of the HOST (blocked or not), and ``has`` is the separate fact
 the bridge uses to decide whether to advertise a platform authenticator. Blocked hosts default to
@@ -27,26 +29,31 @@ import pathlib
 
 import broker_paths
 
-# Hosts whose sign-in flow must not be touched. Two independent observations on this machine:
+# Hosts whose sign-in flow must not be touched.
 #
-#   google.com      refuses a browser whose WebAuthn API has been overridden — "This browser or
-#                   app may not be secure" — proven by a controlled A/B (stock profile accepted,
-#                   bridge profile rejected).
-#   the Microsoft sign-in hosts
-#                   start a WebAuthn ceremony and WAIT for it ("a security window will open...")
-#                   with the page left loading. With the bridge installed and no credential
-#                   stored for the site, that ceremony can never complete, so the flow hangs.
-#                   Leaving those hosts alone lets Microsoft offer its password flow instead.
+# This list used to hold google.com and the Microsoft sign-in hosts. Both entries rested on
+# observations that are no longer true:
 #
-# Suffix-matched: "google.com" also covers accounts.google.com and myaccount.google.com.
-DEFAULT_BLOCKED = (
-    "google.com",
-    "login.live.com",
-    "account.live.com",
-    "login.microsoftonline.com",
-    "login.microsoft.com",
-    "account.microsoft.com",
-)
+#   * Google refused the sign-in because the override was installed as an OWN property on the
+#     navigator instance, with plain JS functions — trivially detectable, and it read as a
+#     tampered browser ("This browser or app may not be secure"). The bridge now patches
+#     CredentialsContainer.prototype instead and wraps the native methods in a Proxy, so no own
+#     property appears and Function.prototype.toString still reports "[native code]". That
+#     detectable shape was the entire cause.
+#
+#   * The Microsoft hang was a ceremony started against a broker that held nothing for the site.
+#     That is a question about the STORE, not the host — and a passkey is exactly what those
+#     hosts are asking for.
+#
+# Passkeys need this API at all: QtWebEngine cannot reach a cross-platform authenticator on its
+# own (measured: navigator.credentials.create simply hangs, no dialog, no result). Blocking the
+# sign-in hosts therefore made passkeys impossible on precisely the sites that use them.
+#
+# The list stays available — "passkey-broker block <host>" — for a host that misbehaves on YOUR
+# machine.
+#
+# Suffix-matched: "google.com" would also cover accounts.google.com and myaccount.google.com.
+DEFAULT_BLOCKED: tuple = ()
 
 
 def _normalise(host):

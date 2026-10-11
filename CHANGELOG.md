@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.2.3
+
+### Fixed
+- **The bridge is no longer detectable, so the sign-in hosts no longer have to be blocked.** The
+  override used to be an OWN property on the navigator instance, with plain JavaScript functions:
+  a page could find it with `hasOwnProperty`, and a sign-in page read it as a tampered browser
+  ("This browser or app may not be secure"). It now patches `CredentialsContainer.prototype` and
+  wraps the engine's own methods in a Proxy, so there is no own property to find, `name`/`length`
+  are preserved, and `Function.prototype.toString` still reports `[native code]` (measured in the
+  engine: the source-text form differs, `[native code]` does not). The `PublicKeyCredential`
+  statics are swapped the same way instead of being overwritten with plain functions.
+
+  The tests now model the engine faithfully: those statics EXIST (resolving false) rather than
+  being absent, and `navigator.credentials` lives on a prototype, never as an own property.
+
+- **Nothing is blocked by default any more.** `google.com` and the Microsoft sign-in hosts were on
+  `DEFAULT_BLOCKED`, which made a passkey impossible on exactly the sites that use one. QtWebEngine
+  cannot reach a cross-platform authenticator by itself — measured: `navigator.credentials.create()`
+  against the YubiKey hangs, with no dialog and no result — so the bridge is required there, not
+  forbidden. The list is still available with `passkey-broker block <host>` for a host that
+  misbehaves on a given machine.
+
 ## 1.2.2
 
 ### Fixed

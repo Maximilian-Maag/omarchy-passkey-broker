@@ -164,6 +164,33 @@
 
     // ── installation ─────────────────────────────────────────────────────────
 
+    function swapMethod(obj, name, impl) {
+        // Replace a native method on the object that OWNS it (a prototype, or the PublicKeyCredential
+        // constructor for its statics) with a Proxy over the original. Two properties matter:
+        //   * the replacement lives where the engine's own method lived, so a page sees no own
+        //     property on navigator and no descriptor where none was before;
+        //   * a Proxy keeps the original's `name`/`length` and still stringifies as
+        //     "[native code]", so Function.prototype.toString gives nothing away.
+        // A plain JS function fails both checks, and a page that makes them refuses the sign-in
+        // outright ("This browser or app may not be secure"). Calls land in `impl`.
+        try {
+            var desc = Object.getOwnPropertyDescriptor(obj, name);
+            if (!desc || typeof desc.value !== "function") { return false; }
+            var original = desc.value;
+            Object.defineProperty(obj, name, {
+                configurable: true,
+                enumerable: desc.enumerable,
+                writable: desc.writable,
+                value: new Proxy(original, {
+                    apply: function (target, thisArg, args) {
+                        return impl.apply(thisArg, args);
+                    }
+                })
+            });
+            return true;
+        } catch (e) { return false; }
+    }
+
     function installPublicKeyCredentialStatics() {
         var PKC = window.PublicKeyCredential;
         if (!PKC) { return; }
@@ -171,10 +198,10 @@
         // passkey path at all. It is only set when the daemon can actually answer (see
         // install): claiming a platform authenticator we cannot serve steers a sign-in page
         // into a passkey ceremony that then fails.
-        try { PKC.isUserVerifyingPlatformAuthenticatorAvailable = function () { return Promise.resolve(true); }; }
-        catch (e) { /* frozen object: the override below still covers the ceremony */ }
-        try { PKC.isConditionalMediationAvailable = function () { return Promise.resolve(false); }; }
-        catch (e) { /* optional */ }
+        swapMethod(PKC, "isUserVerifyingPlatformAuthenticatorAvailable",
+                   function () { return Promise.resolve(true); });
+        swapMethod(PKC, "isConditionalMediationAvailable",
+                   function () { return Promise.resolve(false); });
     }
 
     function credentialsLookNative() {
@@ -227,31 +254,22 @@
     function install(cfg) {
         if (cfg) { CONFIG = cfg; }
         if (!CONFIG.port || !window.navigator) { return false; }
-        // Respect a deliberate opt-out. The Google/Microsoft sign-in compatibility shim removes
-        // PublicKeyCredential and navigator.credentials.create/get so those flows offer a
-        // password instead of a passkey that cannot complete in QtWebEngine. Re-installing them
-        // turns a working sign-in into "Couldn't sign you in", so stay out of the way.
         if (!window.PublicKeyCredential) { return false; }
         if (!credentialsLookNative()) { return false; }
         // Leave the page EXACTLY as found where the daemon says the bridge may not operate.
-        // Overriding navigator.credentials on such a host is read as a tampered browser and the
-        // sign-in is refused outright ("This browser or app may not be secure").
         var flags = siteFlags();
         if (!flags || !flags.install) { return false; }
         // Only claim a platform authenticator when the daemon is actually reachable; a page
         // that asks first must not be steered into a ceremony we cannot serve.
         if (probeHealthy()) { installPublicKeyCredentialStatics(); }
-        var orig = window.navigator.credentials;
-        var bridge = Object.create(orig || Object.prototype);
-        bridge.create = create;
-        bridge.get = get;
-        try {
-            Object.defineProperty(window.navigator, 'credentials',
-                                  {value: bridge, configurable: true, writable: true});
-        } catch (e) {
-            try { window.navigator.credentials = bridge; } catch (e2) { return false; }
-        }
-        return true;
+        // Patch CredentialsContainer.prototype, NOT the navigator instance: an own property on
+        // navigator.credentials is the tell that gets a sign-in refused. Combined with the Proxy
+        // in swapMethod, the page cannot tell the bridge is there.
+        var creds = window.navigator.credentials;
+        var proto = Object.getPrototypeOf(creds);
+        var okCreate = swapMethod(proto, "create", create);
+        var okGet = swapMethod(proto, "get", get);
+        return okCreate && okGet;
     }
 
     var api = {

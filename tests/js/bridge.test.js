@@ -23,12 +23,17 @@ const SOURCE = fs.readFileSync(
 function loadBridge(config, handler, opts) {
     opts = opts || {};
     const requests = [];
-    // A native navigator.credentials, so install() sees the platform's own create/get.
-    const nativeCreds = opts.native === false ? {} : {
+    // A native navigator.credentials. create/get live on the PROTOTYPE, exactly as
+    // CredentialsContainer does in the engine: the bridge patches the prototype, never the
+    // navigator instance, because an own property on navigator is the tell a sign-in refuses.
+    const CredentialsProto = {
         create: function nativeCreate() { return Promise.reject(new Error('native create')); },
         get: function nativeGet() { return Promise.reject(new Error('native get')); }
     };
-    const navigatorObj = { credentials: nativeCreds };
+    const nativeCreds = opts.native === false ? {} : Object.create(CredentialsProto);
+    // navigator.credentials is a PROTOTYPE getter in the engine, so the fake must not put it on
+    // the navigator object itself - the tests assert nothing lands there as an own property.
+    const navigatorObj = Object.create({ credentials: nativeCreds });
 
     class FakeXHR {
         constructor() { this.headers = {}; this.responseText = ''; this.status = 0; }
@@ -58,7 +63,13 @@ function loadBridge(config, handler, opts) {
 
     const windowObj = {
         location: { origin: 'https://example.com', hostname: 'example.com' },
-        PublicKeyCredential: opts.noPublicKeyCredential ? undefined : function () {},
+        PublicKeyCredential: opts.noPublicKeyCredential ? undefined
+            // The statics are own function properties of the constructor, as the engine has them;
+            // the bridge swaps them in place (Proxy-wrapped, so they still look native).
+            : Object.assign(function () {}, {
+                isUserVerifyingPlatformAuthenticatorAvailable: function () { return Promise.resolve(false); },
+                isConditionalMediationAvailable: function () { return Promise.resolve(false); }
+            }),
         XMLHttpRequest: FakeXHR
     };
     Object.defineProperty(windowObj, 'navigator', {
@@ -298,12 +309,13 @@ test('install() backs off when navigator.credentials cannot do create/get', () =
     assert.strictEqual(navigator.credentials.create, undefined);
 });
 
-test('the platform-authenticator statics are only installed when the daemon answers', () => {
+test('the platform-authenticator statics are only claimed when the daemon answers', () => {
     const { window } = loadBridge(CFG, (req) => req.url.endsWith('/health')
         ? { status: 500, body: { ok: false } } : { body: {} });
-    // an unreachable daemon must NOT make the page think a platform authenticator exists
-    assert.strictEqual(window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable,
-                       undefined);
+    // The engine does ship these statics (resolving false). With no daemon reachable we must
+    // leave them alone rather than claim a platform authenticator we cannot serve.
+    return window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()
+        .then((v) => assert.strictEqual(v, false, 'must stay false when the daemon is unreachable'));
 });
 
 test('probeHealthy is false without a configured port', () => {
@@ -318,31 +330,46 @@ test('probeHealthy is true when /health answers 200', () => {
 
 // ── the site gate: the fix for "Couldn't sign you in" ──────────────────────────────────────
 // Overriding navigator.credentials makes Google's sign-in treat the browser as tampered and
-// refuse the login (verified against a stock profile). So the daemon tells the bridge whether a
-// host may be touched at all. Crucially that is a property of the HOST, not of the store:
-// installation must NOT be gated on "a credential exists", or a new passkey could never be
-// registered on the site that needs one.
+// refuse the login. So the daemon tells the bridge whether a host may be touched at all, and the
+// override itself is installed where the engine's own method lives (CredentialsContainer.prototype)
+// behind a Proxy, so a page cannot see it. Passkeys need this: QtWebEngine cannot reach a
+// cross-platform key on its own (measured: the ceremony simply hangs with no dialog).
 test('install() leaves WebAuthn untouched where the daemon says install:false', () => {
     const { bridge, navigator, window } = loadBridge(CFG, () => ({}), { install: false });
     assert.strictEqual(bridge.install(), false);
     assert.strictEqual(navigator.credentials.create.name, 'nativeCreate',
                        'create must stay native');
     assert.strictEqual(navigator.credentials.get.name, 'nativeGet', 'get must stay native');
-    assert.strictEqual(window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable,
-                       undefined, 'and no platform-authenticator claim either');
+    assert.strictEqual(Object.getPrototypeOf(navigator.credentials).create.name, 'nativeCreate',
+                       'the prototype must be untouched too');
+    return window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()
+        .then((v) => assert.strictEqual(v, false, 'and no platform-authenticator claim either'));
 });
 
 test('install() proceeds on a site with NO credential, so registration works', () => {
     const { bridge, navigator } = loadBridge(CFG, () => ({}), { has: false, install: true });
+    const before = navigator.credentials.create;
+    const nameBefore = before.name;
+    const lengthBefore = before.length;
     assert.strictEqual(bridge.install(), true,
                        'a site we hold nothing for is where a new passkey gets registered');
-    assert.strictEqual(navigator.credentials.create.name, 'create');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(navigator, 'credentials'), false,
+                       'nothing may be added as an own property on navigator');
+    // A Proxy preserves name/length, so the replacement is shaped like the method it replaced.
+    // (In the engine the target is native, so it also still reports "[native code]".)
+    assert.strictEqual(navigator.credentials.create.name, nameBefore);
+    assert.strictEqual(navigator.credentials.create.length, lengthBefore);
 });
 
 test('install() proceeds when the broker holds a credential for the site', () => {
     const { bridge, navigator } = loadBridge(CFG, () => ({}), { has: true, install: true });
+    const nameBefore = navigator.credentials.get.name;
+    const lengthBefore = navigator.credentials.get.length;
     assert.strictEqual(bridge.install(), true);
-    assert.strictEqual(navigator.credentials.create.name, 'create');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(navigator, 'credentials'), false,
+                       'the override lives on the prototype, never on navigator');
+    assert.strictEqual(navigator.credentials.get.name, nameBefore);
+    assert.strictEqual(navigator.credentials.get.length, lengthBefore);
 });
 
 test('siteFlags asks /has for the page host, synchronously', () => {

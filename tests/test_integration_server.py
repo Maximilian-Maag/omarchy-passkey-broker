@@ -292,12 +292,15 @@ class Has(ServerCase):
         self.assertTrue(body["install"])
 
     def test_install_is_false_for_a_blocked_host(self):
-        # Google's sign-in refuses an overridden WebAuthn API, so the bridge must stay out of it
+        # Blocking is opt-in now (nothing is blocked by default), so a host that misbehaves on
+        # this machine is kept out explicitly.
+        self.broker.sites.block("accounts.google.com")
         status, body = self.has("accounts.google.com", "https://accounts.google.com")
         self.assertEqual(status, 200)
         self.assertFalse(body["install"])
 
     def test_install_is_false_for_a_subdomain_of_a_blocked_host(self):
+        self.broker.sites.block("google.com")
         _, body = self.has("myaccount.google.com", "https://myaccount.google.com")
         self.assertFalse(body["install"])
 

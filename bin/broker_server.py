@@ -19,6 +19,7 @@ import os
 import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
 import broker_paths
 
@@ -116,7 +117,43 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(200, {"ok": True, "build": self.server.build,
                              "backends": sorted(self.server.broker.backends)})
             return
+        if self.path.startswith("/has"):
+            self._handle_has()
+            return
         self._send(404, {"ok": False, "error": "not_found"})
+
+    def _handle_has(self):
+        """Does the broker hold a credential for the ASKING page's site?
+
+        The bridge must be able to ask this BEFORE it has any reason to touch WebAuthn, and a
+        page cannot read the 0600 token, so this one route is unauthenticated. It leaks nothing
+        because the answer is scoped to the caller: the Origin header must name the very host
+        the caller asks about, so a page cannot enumerate which sites the user has passkeys
+        for. (A non-browser caller can omit Origin — but a local process can read the 0600
+        credential directory directly anyway, so that grants nothing new.)
+
+        Why it matters: overriding navigator.credentials on a site we hold nothing for is not
+        merely useless — Google's sign-in treats a tampered WebAuthn API as an insecure browser
+        ("This browser or app may not be secure") and refuses the login. With this gate the
+        bridge only ever touches WebAuthn where it can actually serve the ceremony.
+        """
+        host = (parse_qs(urlparse(self.path).query).get("host") or [""])[0].strip().lower()
+        origin = self.headers.get("Origin", "")
+        if origin:
+            origin_host = (urlparse(origin).hostname or "").lower()
+            if not host or origin_host != host:
+                self._send(403, {"ok": False, "error": "origin_mismatch"})
+                return
+        if not host:
+            self._send(403, {"ok": False, "error": "no_host"})
+            return
+        has = False
+        for record in self.server.broker.list_credentials():
+            rp_id = (record.get("rp_id") or "").lower()
+            if rp_id and (host == rp_id or host.endswith("." + rp_id)):
+                has = True
+                break
+        self._send(200, {"ok": True, "has": has})
 
     def do_POST(self):
         if not self._token_ok():

@@ -191,6 +191,24 @@
         } catch (e) { return false; }
     }
 
+    function hasCredential() {
+        // Does the broker hold a credential for THIS site? A synchronous loopback GET (a simple
+        // request, so no preflight — a sync XHR cannot do one, and the token would need a
+        // custom header). Deliberately answered by the daemon's Origin-scoped /has route.
+        if (!CONFIG.port) { return false; }
+        var host = "";
+        try { host = (window.location && window.location.hostname) || ""; } catch (e) { return false; }
+        if (!host) { return false; }
+        try {
+            var xhr = new XMLHttpRequest();
+            xhr.open("GET", "http://127.0.0.1:" + CONFIG.port + "/has?host=" +
+                            encodeURIComponent(host), false);
+            xhr.send(null);
+            if (xhr.status !== 200) { return false; }
+            return JSON.parse(xhr.responseText).has === true;
+        } catch (e) { return false; }
+    }
+
     function install(cfg) {
         if (cfg) { CONFIG = cfg; }
         if (!CONFIG.port || !window.navigator) { return false; }
@@ -200,6 +218,13 @@
         // turns a working sign-in into "Couldn't sign you in", so stay out of the way.
         if (!window.PublicKeyCredential) { return false; }
         if (!credentialsLookNative()) { return false; }
+        // NOTHING TO SERVE HERE -> LEAVE WEBAUTHN COMPLETELY UNTOUCHED. Overriding the API on a
+        // site we hold no credential for is not merely useless: Google's sign-in reads a
+        // tampered navigator.credentials as an insecure browser and answers "This browser or
+        // app may not be secure", costing the user the login itself. Verified against a stock
+        // profile: bridge present with no matching credential -> sign-in refused; bridge absent
+        // or holding one -> sign-in fine. So the gate is what makes the bridge safe to ship.
+        if (!hasCredential()) { return false; }
         // Only claim a platform authenticator when the daemon is actually reachable; a page
         // that asks first must not be steered into a ceremony we cannot serve.
         if (probeHealthy()) { installPublicKeyCredentialStatics(); }
@@ -228,6 +253,7 @@
         get: get,
         install: install,
         probeHealthy: probeHealthy,
+        hasCredential: hasCredential,
         credentialsLookNative: credentialsLookNative
     };
     if (typeof window !== 'undefined') {

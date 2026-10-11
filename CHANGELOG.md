@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.1.0
+
+### Fixed
+- **Google sign-in was refused ("This browser or app may not be secure") whenever the bridge was
+  installed.** Overriding `navigator.credentials` on a site the broker holds no credential for
+  makes Google read the browser as tampered and block the login. Reproduced against an isolated
+  stock profile: bridge present with no matching credential → sign-in refused; the same profile
+  with the bridge absent → sign-in fine; Microsoft was unaffected either way. The bridge now asks
+  the daemon's new `GET /has` before touching WebAuthn, and leaves the page's WebAuthn completely
+  untouched when it has nothing to serve there.
+
+### Added
+- `GET /has?host=<host>` — does the broker hold a credential for the asking site? Unauthenticated
+  by necessity (the bridge must ask before it has cause to touch WebAuthn, and a page cannot read
+  the 0600 token), but Origin-scoped: the `Origin` header must name the same host, so a page
+  cannot enumerate which sites the user holds passkeys for.
+
 ## 1.0.0
 
 First complete release of the passkey broker.

@@ -240,5 +240,60 @@ class Cors(unittest.TestCase):
         self.assertEqual(headers["Access-Control-Allow-Origin"], "*")
 
 
+class Has(ServerCase):
+    """GET /has tells the bridge whether THIS site has a credential, so it never overrides
+    WebAuthn where it cannot serve — the override is what makes Google's sign-in refuse the
+    browser ("This browser or app may not be secure"). It is unauthenticated by necessity (the
+    bridge must ask before it has cause to touch WebAuthn, and a page cannot read the token), so
+    it must not become an oracle for which sites the user holds passkeys for."""
+
+    def has(self, host, origin=None):
+        req = urllib.request.Request(self.base + "/has?host=" + host)
+        if origin:
+            req.add_header("Origin", origin)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.status, json.loads(resp.read().decode())
+        except urllib.error.HTTPError as exc:
+            body = json.loads(exc.read().decode())
+            exc.close()
+            return exc.code, body
+
+    def test_needs_no_token(self):
+        status, _ = self.has("example.com", "https://example.com")
+        self.assertEqual(status, 200)
+
+    def test_false_when_nothing_matches(self):
+        status, body = self.has("example.com", "https://example.com")
+        self.assertEqual(status, 200)
+        self.assertFalse(body["has"])
+
+    def test_true_for_the_exact_host(self):
+        self.create("example.com")
+        _, body = self.has("example.com", "https://example.com")
+        self.assertTrue(body["has"])
+
+    def test_true_for_a_subdomain_of_the_rp(self):
+        self.create("example.com")
+        _, body = self.has("accounts.example.com", "https://accounts.example.com")
+        self.assertTrue(body["has"])
+
+    def test_false_for_an_unrelated_host_that_has_credentials_elsewhere(self):
+        self.create("example.com")
+        _, body = self.has("evil.test", "https://evil.test")
+        self.assertFalse(body["has"])
+
+    def test_origin_mismatch_is_refused(self):
+        # a page must not be able to enumerate which sites the user holds passkeys for
+        self.create("example.com")
+        status, body = self.has("example.com", "https://attacker.test")
+        self.assertEqual(status, 403)
+        self.assertEqual(body["error"], "origin_mismatch")
+
+    def test_missing_host_is_refused(self):
+        status, _ = self.has("", "https://example.com")
+        self.assertEqual(status, 403)
+
+
 if __name__ == "__main__":
     unittest.main()

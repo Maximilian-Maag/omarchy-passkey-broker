@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Unit tests for the per-site policy.
 
-The policy decides where the bridge may touch WebAuthn at all. It exists because one host
-(Google) refuses a browser whose WebAuthn API has been overridden by a userscript, while
-every other site needs the bridge present for passkeys to work at all.
+The policy decides where the bridge may touch WebAuthn at all. It exists because some sign-in
+hosts cannot tolerate an overridden WebAuthn API: Google refuses such a browser outright, and the
+Microsoft sign-in flow starts a ceremony it then waits on forever when the broker has nothing to
+serve — while every other site needs the bridge present for passkeys to work at all.
 """
 import json
 import pathlib
@@ -37,7 +38,16 @@ class Defaults(unittest.TestCase):
     def test_an_unrelated_host_is_not_blocked(self):
         p = policy()
         self.assertFalse(p.is_blocked("github.com"))
-        self.assertFalse(p.is_blocked("login.microsoftonline.com"))
+        self.assertFalse(p.is_blocked("example.org"))
+        self.assertFalse(p.is_blocked("accounts.youtube.com"))
+
+    def test_the_microsoft_sign_in_hosts_are_blocked_out_of_the_box(self):
+        # observed: their flow starts a WebAuthn ceremony and then waits ("a security window will
+        # open"), hanging forever while the bridge is installed and the broker has nothing for it
+        p = policy()
+        for host in ("login.live.com", "account.live.com", "login.microsoftonline.com",
+                     "login.microsoft.com", "account.microsoft.com"):
+            self.assertTrue(p.is_blocked(host), "%s must be blocked by default" % host)
 
     def test_a_lookalike_domain_is_not_blocked(self):
         # "notgoogle.com" must not be caught by the "google.com" entry: suffix matching has to

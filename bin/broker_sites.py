@@ -17,8 +17,9 @@ Two facts have to hold at once:
 
 Hence: ``install`` is a property of the HOST (blocked or not), and ``has`` is the separate fact
 the bridge uses to decide whether to advertise a platform authenticator. Blocked hosts default to
-google.com — the one observed to reject the override — and the list is the user's to edit with
-``passkey-broker block|unblock``.
+the sign-in flows observed to break under an overridden API (see DEFAULT_BLOCKED), and the list is
+the user's to edit with ``passkey-broker block|unblock`` — unblocking is what you do before
+registering a passkey on a host that is blocked by default.
 """
 import json
 import os
@@ -26,9 +27,26 @@ import pathlib
 
 import broker_paths
 
-# Hosts observed to refuse a browser whose WebAuthn API has been overridden by a userscript.
-# Suffix-matched: blocking "google.com" also covers accounts.google.com and myaccount.google.com.
-DEFAULT_BLOCKED = ("google.com",)
+# Hosts whose sign-in flow must not be touched. Two independent observations on this machine:
+#
+#   google.com      refuses a browser whose WebAuthn API has been overridden — "This browser or
+#                   app may not be secure" — proven by a controlled A/B (stock profile accepted,
+#                   bridge profile rejected).
+#   the Microsoft sign-in hosts
+#                   start a WebAuthn ceremony and WAIT for it ("a security window will open...")
+#                   with the page left loading. With the bridge installed and no credential
+#                   stored for the site, that ceremony can never complete, so the flow hangs.
+#                   Leaving those hosts alone lets Microsoft offer its password flow instead.
+#
+# Suffix-matched: "google.com" also covers accounts.google.com and myaccount.google.com.
+DEFAULT_BLOCKED = (
+    "google.com",
+    "login.live.com",
+    "account.live.com",
+    "login.microsoftonline.com",
+    "login.microsoft.com",
+    "account.microsoft.com",
+)
 
 
 def _normalise(host):

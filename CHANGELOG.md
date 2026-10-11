@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.2.2
+
+### Fixed
+- **The Microsoft sign-in flow hung — it said a security window would open, and never did.** The
+  bridge installed on the Microsoft sign-in hosts, Microsoft started a WebAuthn ceremony it then
+  waited on, and the broker holds no credential for those sites, so the ceremony could never
+  complete: the page just sat there loading. Those hosts (`login.live.com`, `account.live.com`,
+  `login.microsoftonline.com`, `login.microsoft.com`, `account.microsoft.com`) are now blocked by
+  default, exactly like Google. The bridge leaves them alone, Microsoft sees an ordinary browser
+  with no platform authenticator, and its password flow is offered instead.
+  To put a passkey on such a host, unblock it first (`passkey-broker unblock login.live.com`),
+  register, then it can be blocked again.
+
 ## 1.2.1
 
 ### Fixed

@@ -173,5 +173,15 @@ class DefaultUserVerification(unittest.TestCase):
         self.assertEqual(self.auth_flags(resp), w.FLAG_UP | w.FLAG_UV)
 
 
+class VerificationContract(unittest.TestCase):
+    """Who verifies the user, per backend — the broker reads this to decide whether to run the
+    local fingerprint check. Getting it wrong in either direction is a real bug: a software key
+    that skipped the check would be protected by a file's permissions alone, and a token that
+    required it would be unusable on a machine whose sensor the owner cannot use."""
+
+    def test_the_software_backend_does_not_verify_itself(self):
+        self.assertFalse(SoftwareBackend().self_verifies)
+
+
 if __name__ == "__main__":
     unittest.main()

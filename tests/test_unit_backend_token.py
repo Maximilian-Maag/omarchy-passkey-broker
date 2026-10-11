@@ -495,5 +495,16 @@ class TokenUvReporting(unittest.TestCase):
         self.assertFalse(updates["uv"])
 
 
+class VerificationContract(unittest.TestCase):
+    """The broker reads ``self_verifies`` to decide whether to run the LOCAL fingerprint check.
+    A token validates the user itself (its PIN, which sets the UV flag), so requiring fprintd as
+    well made an attached key unusable on a machine whose sensor the owner cannot use — the bug
+    this flags against. Getting it wrong the other way would report unverified keys as verified.
+    """
+
+    def test_the_token_verifies_itself(self):
+        self.assertTrue(TokenBackend().self_verifies)
+
+
 if __name__ == "__main__":
     unittest.main()

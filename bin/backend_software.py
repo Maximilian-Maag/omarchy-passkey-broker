@@ -20,6 +20,9 @@ ALG_ES256 = -7
 
 class SoftwareBackend:
     name = "software"
+    # The private key is a file on disk, so the local fingerprint check IS the user verification
+    # here — possession of the file must not be enough. (A token credential sets this True.)
+    self_verifies = False
 
     @property
     def aaguid(self):
@@ -31,7 +34,9 @@ class SoftwareBackend:
         nums = key.public_key().public_numbers()
         cose_key = w.cose_es256_from_coords(nums.x, nums.y)
         cred_id = w.make_credential_id()
-        flags = w.FLAG_UP | (w.FLAG_UV if uv else 0)
+        flags = w.FLAG_UP
+        if uv:
+            flags |= w.FLAG_UV
         auth_data = w.authenticator_data(rp_id, flags, 0,
                                          attested=(self.aaguid, cred_id, cose_key))
         att_obj = w.attestation_object(auth_data)
@@ -57,7 +62,9 @@ class SoftwareBackend:
         key = serialization.load_pem_private_key(record["private_pem"].encode(), password=None)
         cred_id = w.b64u_decode(record["cred_id"])
         sign_count = int(record.get("sign_count", 0)) + 1
-        flags = w.FLAG_UP | (w.FLAG_UV if uv else 0)
+        flags = w.FLAG_UP
+        if uv:
+            flags |= w.FLAG_UV
         auth_data = w.authenticator_data(record["rp_id"], flags, sign_count)
         signature = key.sign(w.assertion_signature_base(auth_data, client_data_bytes),
                              ec.ECDSA(hashes.SHA256()))

@@ -43,7 +43,9 @@ function loadBridge(config, handler, opts) {
             // here" (which must leave the page's WebAuthn completely alone).
             if (String(this.url).includes('/has')) {
                 this.status = 200;
-                this.responseText = JSON.stringify({ ok: true, has: opts.has !== false });
+                this.responseText = JSON.stringify({ ok: true,
+                                                     has: opts.has !== false,
+                                                     install: opts.install !== false });
                 return;
             }
             const reply = handler(req);
@@ -311,13 +313,14 @@ test('probeHealthy is true when /health answers 200', () => {
     assert.strictEqual(bridge.probeHealthy(), true);
 });
 
-// ── the credential gate: the fix for "Couldn't sign you in" ────────────────────────────────
-// Overriding navigator.credentials on a site the broker cannot serve makes Google's sign-in
-// treat the browser as tampered and refuse the login. With nothing to serve, install() must not
-// touch WebAuthn at all — verified against a stock profile, where a bridge with no matching
-// credential broke sign-in and the same profile without the bridge signed in fine.
-test('install() leaves WebAuthn untouched when the broker holds no credential for the site', () => {
-    const { bridge, navigator, window } = loadBridge(CFG, () => ({}), { has: false });
+// ── the site gate: the fix for "Couldn't sign you in" ──────────────────────────────────────
+// Overriding navigator.credentials makes Google's sign-in treat the browser as tampered and
+// refuse the login (verified against a stock profile). So the daemon tells the bridge whether a
+// host may be touched at all. Crucially that is a property of the HOST, not of the store:
+// installation must NOT be gated on "a credential exists", or a new passkey could never be
+// registered on the site that needs one.
+test('install() leaves WebAuthn untouched where the daemon says install:false', () => {
+    const { bridge, navigator, window } = loadBridge(CFG, () => ({}), { install: false });
     assert.strictEqual(bridge.install(), false);
     assert.strictEqual(navigator.credentials.create.name, 'nativeCreate',
                        'create must stay native');
@@ -326,29 +329,31 @@ test('install() leaves WebAuthn untouched when the broker holds no credential fo
                        undefined, 'and no platform-authenticator claim either');
 });
 
+test('install() proceeds on a site with NO credential, so registration works', () => {
+    const { bridge, navigator } = loadBridge(CFG, () => ({}), { has: false, install: true });
+    assert.strictEqual(bridge.install(), true,
+                       'a site we hold nothing for is where a new passkey gets registered');
+    assert.strictEqual(navigator.credentials.create.name, 'create');
+});
+
 test('install() proceeds when the broker holds a credential for the site', () => {
-    const { bridge, navigator } = loadBridge(CFG, () => ({}), { has: true });
+    const { bridge, navigator } = loadBridge(CFG, () => ({}), { has: true, install: true });
     assert.strictEqual(bridge.install(), true);
     assert.strictEqual(navigator.credentials.create.name, 'create');
 });
 
-test('hasCredential asks /has for the page host, synchronously', () => {
-    const { bridge, requests } = loadBridge(CFG, () => ({}), { has: true });
-    assert.strictEqual(bridge.hasCredential(), true);
+test('siteFlags asks /has for the page host, synchronously', () => {
+    const { bridge, requests } = loadBridge(CFG, () => ({}), { has: true, install: true });
+    assert.deepStrictEqual(plain(bridge.siteFlags()), { has: true, install: true });
     const asked = requests.filter((r) => r.url.includes('/has'));
     assert.strictEqual(asked.length, 1);
     assert.ok(asked[0].url.includes('host=example.com'), asked[0].url);
     assert.strictEqual(asked[0].async, false, 'install() needs the answer immediately');
 });
 
-test('hasCredential is false when the broker says has:false', () => {
-    const { bridge } = loadBridge(CFG, () => ({}), { has: false });
-    assert.strictEqual(bridge.hasCredential(), false);
-});
-
-test('hasCredential is false without a configured port', () => {
+test('siteFlags is null without a configured port', () => {
     const { bridge } = loadBridge({ port: 0, token: '' }, () => ({}));
-    assert.strictEqual(bridge.hasCredential(), false);
+    assert.strictEqual(bridge.siteFlags(), null);
 });
 
 test('install() reports the native credentials check', () => {

@@ -19,16 +19,19 @@ setUpModule, tearDownModule = isolate()
 import webauthn_core as w  # noqa: E402
 from broker import PasskeyBroker  # noqa: E402
 from broker_store import CredentialStore  # noqa: E402
-from broker_verify import NullVerifier  # noqa: E402
+from broker_verify import NullVerifier, VerifyResult  # noqa: E402
 
 CD = w.b64u_encode(w.client_data("webauthn.create", "Y2hhbGxlbmdl", "https://example.com"))
 
 
 class StubBackend:
-    def __init__(self, name, uv_seen=None):
+    def __init__(self, name, uv_seen=None, self_verifies=False):
         self.name = name
         self.calls = []
         self._uv_seen = uv_seen
+        # A token authenticator verifies the user itself (its PIN), so the broker must not
+        # additionally demand the local fingerprint for it.
+        self.self_verifies = self_verifies
 
     def register(self, rp_id, client_data, user_handle=b"", uv=True):
         self.calls.append(("register", rp_id, uv))
@@ -239,6 +242,75 @@ class UvReporting(unittest.TestCase):
 
     def test_no_result_and_no_flag_is_false(self):
         self.assertFalse(self.report({}, None))
+
+
+class CountingVerifier:
+    """A verifier that records whether the broker consulted it at all."""
+
+    def __init__(self, ok=True, state=None):
+        self.calls = 0
+        self._ok = ok
+        self.state = state or ("verified" if ok else "declined")
+
+    def verify(self, message=None):
+        self.calls += 1
+        return VerifyResult(self._ok, self.state, "counting verifier")
+
+
+class BackendAwareVerification(unittest.TestCase):
+    """A FIDO2 token verifies the user with its OWN PIN, so the broker must not additionally
+    demand the local fingerprint for it. Requiring both made an attached security key unusable
+    on a machine whose fingerprint sensor the owner cannot use — the bug this fix exists for.
+    A software credential keeps its key in a file, so there the fingerprint check still stands."""
+
+    def test_software_still_needs_the_fingerprint(self):
+        v = CountingVerifier(ok=False)
+        r = broker(verifier=v).register("example.com", CD, backend="software")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["error"], "declined")
+        self.assertEqual(v.calls, 1, "a software key must still be gated by the fingerprint")
+
+    def test_a_self_verifying_token_does_not_consult_the_fingerprint(self):
+        v = CountingVerifier(ok=False)  # a sensor that would refuse everything
+        b = broker(verifier=v, backends={"token": StubBackend("token", self_verifies=True)})
+        r = b.register("example.com", CD, backend="token")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(v.calls, 0, "the token verifies itself; the sensor must not be asked")
+        self.assertTrue(r["user_verified"], "the token's own UV counts as verified")
+
+    def test_the_token_is_told_to_use_its_own_uv(self):
+        tok = StubBackend("token", self_verifies=True)
+        broker(backends={"token": tok}).register("example.com", CD, backend="token")
+        self.assertEqual(tok.calls, [("register", "example.com", True)])
+
+    def test_authenticate_also_skips_the_fingerprint_for_a_token(self):
+        v = CountingVerifier(ok=False)
+        b = broker(verifier=v, backends={"token": StubBackend("token", self_verifies=True)})
+        b.store.save({"cred_id": "tk", "rp_id": "example.com", "backend": "token",
+                      "sign_count": 0})
+        r = b.authenticate("example.com", CD)
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(v.calls, 0)
+        self.assertTrue(r["user_verified"])
+
+    def test_an_unavailable_sensor_does_not_block_a_token(self):
+        v = CountingVerifier(ok=False, state="unavailable")
+        b = broker(verifier=v, backends={"token": StubBackend("token", self_verifies=True)})
+        self.assertTrue(b.register("example.com", CD, backend="token")["ok"])
+
+    def test_the_software_path_still_refuses_an_unavailable_sensor(self):
+        # "we could not check" must never be indistinguishable from "checked"
+        v = CountingVerifier(ok=False, state="unavailable")
+        r = broker(verifier=v).register("example.com", CD, backend="software")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["error"], "unavailable")
+
+    def test_a_verify_opt_out_is_unchanged(self):
+        v = CountingVerifier(ok=False)
+        r = broker(verifier=v).register("example.com", CD, backend="software", verify=False)
+        self.assertTrue(r["ok"])
+        self.assertEqual(v.calls, 0)
+        self.assertFalse(r["user_verified"], "an opt-out must not look verified")
 
 
 if __name__ == "__main__":

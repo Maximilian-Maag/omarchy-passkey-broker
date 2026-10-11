@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.2.0
+
+### Fixed
+- **A FIDO2 security key no longer needs the machine's fingerprint sensor.** The broker ran the
+  local fprintd check before *every* operation, token-backed ones included, so on a machine whose
+  fingerprint sensor the owner cannot use, an attached security key was completely unusable. A
+  token verifies the user itself — it validates the PIN and sets the UV flag from it — so the
+  local check is now skipped for token credentials (reported as `delegated`) and still required
+  for software ones, whose private key is a file on disk. Verified against the real hardware: a
+  token registration consults the fingerprint verifier **0** times.
+- **A new passkey could not be registered on a site that had none.** The 1.1.0 gate installed the
+  bridge only where the broker already held a credential for the site — false precisely on the
+  sites where a new passkey must be created, so registration was impossible. Installation is now a
+  property of the HOST, not of the store.
+
+### Added
+- **Per-site policy** — `passkey-broker sites`, `block <host>`, `unblock <host>`. The browser
+  bridge is kept out of hosts whose sign-in refuses an overridden WebAuthn API. `google.com` is
+  blocked out of the box (suffix-matched, so `accounts.google.com` is covered) because Google
+  answers such a browser with *"This browser or app may not be secure"*.
+- `GET /has` now returns `has` (does a credential exist for this site) **and** `install` (may the
+  bridge operate on this host). They are independent on purpose: installation has to stay on where
+  registration happens, so it must never be gated on a credential already existing.
+
 ## 1.1.0
 
 ### Fixed

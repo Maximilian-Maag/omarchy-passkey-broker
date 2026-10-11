@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "Maximilian-Maag.passkey-broker",
   "name": "Passkey Broker",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "Maximilian-Maag",
   "license": "MIT",
   "description": "A system-wide WebAuthn authenticator for Omarchy. QtWebEngine advertises passkeys and provides no authenticator behind them, so this broker answers the ceremony itself \u2014 a FIDO2 security key where one is attached, or a fingerprint-gated software key otherwise \u2014 and a qutebrowser bridge hands the result to the page.",

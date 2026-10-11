@@ -10,6 +10,11 @@ reports honestly what happened, distinguishing the three outcomes that matter:
   * declined     — a finger was presented and did not match; the caller must refuse
   * unavailable  — fprintd is missing or errored; the caller decides (and by default refuses,
                    because "we could not check" must never be indistinguishable from "checked")
+  * delegated    — set by the BROKER, not by fprintd: user verification was handed to the
+                   credential's own authenticator (a FIDO2 token validating its PIN). It counts
+                   exactly like ``verified`` — but no local sensor was involved, which is what
+                   makes an attached security key usable on a machine whose fingerprint sensor
+                   the owner cannot use.
 
 The command runner is injectable so the whole policy can be tested without ever prompting a
 real sensor.

@@ -268,6 +268,32 @@ class Has(ServerCase):
         self.assertEqual(status, 200)
         self.assertFalse(body["has"])
 
+    def test_install_is_allowed_on_a_site_with_no_credential(self):
+        # REGISTRATION must be possible: a new passkey is created on a site we hold nothing for,
+        # so "no credential" must never switch the bridge off.
+        status, body = self.has("example.com", "https://example.com")
+        self.assertEqual(status, 200)
+        self.assertFalse(body["has"])
+        self.assertTrue(body["install"])
+
+    def test_install_is_false_for_a_blocked_host(self):
+        # Google's sign-in refuses an overridden WebAuthn API, so the bridge must stay out of it
+        status, body = self.has("accounts.google.com", "https://accounts.google.com")
+        self.assertEqual(status, 200)
+        self.assertFalse(body["install"])
+
+    def test_install_is_false_for_a_subdomain_of_a_blocked_host(self):
+        _, body = self.has("myaccount.google.com", "https://myaccount.google.com")
+        self.assertFalse(body["install"])
+
+    def test_blocking_is_configurable(self):
+        self.broker.sites.block("example.com")
+        _, body = self.has("example.com", "https://example.com")
+        self.assertFalse(body["install"])
+        self.broker.sites.unblock("example.com")
+        _, body = self.has("example.com", "https://example.com")
+        self.assertTrue(body["install"])
+
     def test_true_for_the_exact_host(self):
         self.create("example.com")
         _, body = self.has("example.com", "https://example.com")

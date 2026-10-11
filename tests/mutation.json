@@ -25,6 +25,11 @@
       "tests": ["python3", "-m", "unittest", "tests.test_unit_broker_paths", "-q"]
     },
     {
+      "path": "bin/broker_sites.py",
+      "lang": "python",
+      "tests": ["python3", "-m", "unittest", "tests.test_unit_broker_sites", "-q"]
+    },
+    {
       "path": "bin/broker_store.py",
       "lang": "python",
       "tests": ["python3", "-m", "unittest", "tests.test_unit_broker_store", "-q"]

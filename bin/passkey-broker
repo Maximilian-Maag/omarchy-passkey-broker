@@ -208,6 +208,37 @@ def cmd_delete(args):
     return 0 if result["ok"] else 1
 
 
+def cmd_sites(args):
+    """Show which hosts the browser bridge is kept out of."""
+    sites = _make_broker(verifier=_null_verifier()).sites
+    if args.json:
+        print(json.dumps({"blocked": sites.blocked}, indent=2))
+        return 0
+    print("passkey-broker: the browser bridge is kept out of these hosts. Their sign-in refuses")
+    print("a browser whose WebAuthn API has been overridden by a userscript — and overriding it")
+    print("is exactly how passkeys are served — so the bridge leaves those pages untouched:")
+    for host in sites.blocked:
+        print("  %s" % host)
+    return 0
+
+
+def cmd_block(args):
+    sites = _make_broker(verifier=_null_verifier()).sites
+    sites.block(args.host)
+    print("passkey-broker: bridge blocked on %s" % args.host)
+    return 0
+
+
+def cmd_unblock(args):
+    sites = _make_broker(verifier=_null_verifier()).sites
+    sites.unblock(args.host)
+    print("passkey-broker: bridge allowed on %s" % args.host)
+    print("  NOTE: if this host checks for a tampered WebAuthn API its sign-in may refuse the")
+    print("  browser (\"This browser or app may not be secure\"). Re-block it with:")
+    print("    passkey-broker block %s" % args.host)
+    return 0
+
+
 def cmd_serve(args):
     from broker import PasskeyBroker
     from broker_server import BrokerServer
@@ -317,6 +348,15 @@ def build_parser():
     dele = sub.add_parser("delete", help="delete a credential")
     dele.add_argument("cred_id")
     dele.set_defaults(func=cmd_delete)
+
+    sites = sub.add_parser("sites", help="list hosts the bridge is kept out of")
+    sites.add_argument("--json", action="store_true")
+    sites.set_defaults(func=cmd_sites)
+
+    for name, func in (("block", cmd_block), ("unblock", cmd_unblock)):
+        hp = sub.add_parser(name, help="%s the bridge on a host" % name)
+        hp.add_argument("host", help="a domain; subdomains are covered too")
+        hp.set_defaults(func=func)
 
     stat = sub.add_parser("status", help="is a daemon running?")
     stat.add_argument("--json", action="store_true")

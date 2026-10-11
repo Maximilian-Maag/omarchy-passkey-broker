@@ -191,22 +191,33 @@
         } catch (e) { return false; }
     }
 
-    function hasCredential() {
-        // Does the broker hold a credential for THIS site? A synchronous loopback GET (a simple
-        // request, so no preflight — a sync XHR cannot do one, and the token would need a
-        // custom header). Deliberately answered by the daemon's Origin-scoped /has route.
-        if (!CONFIG.port) { return false; }
+    function siteFlags() {
+        // {has, install} for THIS page's site, or null when it cannot be determined. A
+        // synchronous loopback GET (a simple request, so no preflight — a sync XHR cannot do
+        // one, and the token would require a custom header). Answered by the daemon's
+        // Origin-scoped /has route:
+        //
+        //   install - may the bridge touch WebAuthn here AT ALL? False on a host whose sign-in
+        //             refuses an overridden API (Google), where the override costs the login.
+        //   has     - is there a credential for this site?
+        //
+        // install is deliberately a property of the HOST and not of the store: a site we hold
+        // nothing for is exactly where a NEW passkey gets registered, so "no credential" must
+        // never switch the bridge off. (Gating installation on `has` made registration
+        // impossible — the bridge was off on precisely the sites that needed it.)
+        if (!CONFIG.port) { return null; }
         var host = "";
-        try { host = (window.location && window.location.hostname) || ""; } catch (e) { return false; }
-        if (!host) { return false; }
+        try { host = (window.location && window.location.hostname) || ""; } catch (e) { return null; }
+        if (!host) { return null; }
         try {
             var xhr = new XMLHttpRequest();
             xhr.open("GET", "http://127.0.0.1:" + CONFIG.port + "/has?host=" +
                             encodeURIComponent(host), false);
             xhr.send(null);
-            if (xhr.status !== 200) { return false; }
-            return JSON.parse(xhr.responseText).has === true;
-        } catch (e) { return false; }
+            if (xhr.status !== 200) { return null; }
+            var data = JSON.parse(xhr.responseText);
+            return {has: data.has === true, install: data.install === true};
+        } catch (e) { return null; }
     }
 
     function install(cfg) {
@@ -218,13 +229,11 @@
         // turns a working sign-in into "Couldn't sign you in", so stay out of the way.
         if (!window.PublicKeyCredential) { return false; }
         if (!credentialsLookNative()) { return false; }
-        // NOTHING TO SERVE HERE -> LEAVE WEBAUTHN COMPLETELY UNTOUCHED. Overriding the API on a
-        // site we hold no credential for is not merely useless: Google's sign-in reads a
-        // tampered navigator.credentials as an insecure browser and answers "This browser or
-        // app may not be secure", costing the user the login itself. Verified against a stock
-        // profile: bridge present with no matching credential -> sign-in refused; bridge absent
-        // or holding one -> sign-in fine. So the gate is what makes the bridge safe to ship.
-        if (!hasCredential()) { return false; }
+        // Leave the page EXACTLY as found where the daemon says the bridge may not operate.
+        // Overriding navigator.credentials on such a host is read as a tampered browser and the
+        // sign-in is refused outright ("This browser or app may not be secure").
+        var flags = siteFlags();
+        if (!flags || !flags.install) { return false; }
         // Only claim a platform authenticator when the daemon is actually reachable; a page
         // that asks first must not be steered into a ceremony we cannot serve.
         if (probeHealthy()) { installPublicKeyCredentialStatics(); }
@@ -253,7 +262,7 @@
         get: get,
         install: install,
         probeHealthy: probeHealthy,
-        hasCredential: hasCredential,
+        siteFlags: siteFlags,
         credentialsLookNative: credentialsLookNative
     };
     if (typeof window !== 'undefined') {

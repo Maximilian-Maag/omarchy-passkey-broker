@@ -52,6 +52,10 @@ def _has_builtin_uv(ctap):
 
 class TokenBackend:
     name = "token"
+    # The token verifies the user ITSELF: it validates the PIN and sets the UV flag from it.
+    # So the broker must not also demand the local fingerprint — on a machine whose fingerprint
+    # sensor the owner cannot use, that made an attached security key completely unusable.
+    self_verifies = True
 
     def __init__(self, ctap=None, pin=None):
         self._injected = ctap

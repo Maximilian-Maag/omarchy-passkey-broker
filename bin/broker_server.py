@@ -123,7 +123,7 @@ class _Handler(BaseHTTPRequestHandler):
         self._send(404, {"ok": False, "error": "not_found"})
 
     def _handle_has(self):
-        """Does the broker hold a credential for the ASKING page's site?
+        """What may the bridge do on the ASKING page's site: install, and is there work?
 
         The bridge must be able to ask this BEFORE it has any reason to touch WebAuthn, and a
         page cannot read the 0600 token, so this one route is unauthenticated. It leaks nothing
@@ -132,10 +132,12 @@ class _Handler(BaseHTTPRequestHandler):
         for. (A non-browser caller can omit Origin — but a local process can read the 0600
         credential directory directly anyway, so that grants nothing new.)
 
-        Why it matters: overriding navigator.credentials on a site we hold nothing for is not
-        merely useless — Google's sign-in treats a tampered WebAuthn API as an insecure browser
-        ("This browser or app may not be secure") and refuses the login. With this gate the
-        bridge only ever touches WebAuthn where it can actually serve the ceremony.
+        ``install`` is False for a host whose sign-in refuses an overridden WebAuthn API
+        (Google; see broker_sites) — overriding it there is read as a tampered browser and the
+        login is refused. ``has`` reports whether a credential exists, which the bridge uses to
+        decide whether to advertise a platform authenticator. They are independent on purpose:
+        install must stay true on a site with no credential yet, or a new passkey could never
+        be registered.
         """
         host = (parse_qs(urlparse(self.path).query).get("host") or [""])[0].strip().lower()
         origin = self.headers.get("Origin", "")
@@ -147,13 +149,8 @@ class _Handler(BaseHTTPRequestHandler):
         if not host:
             self._send(403, {"ok": False, "error": "no_host"})
             return
-        has = False
-        for record in self.server.broker.list_credentials():
-            rp_id = (record.get("rp_id") or "").lower()
-            if rp_id and (host == rp_id or host.endswith("." + rp_id)):
-                has = True
-                break
-        self._send(200, {"ok": True, "has": has})
+        policy = self.server.broker.site_policy(host)
+        self._send(200, {"ok": True, "has": policy["has"], "install": policy["install"]})
 
     def do_POST(self):
         if not self._token_ok():

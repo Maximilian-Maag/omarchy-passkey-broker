@@ -30,16 +30,24 @@ from broker_verify import NullVerifier  # noqa: E402
 TOKEN = "integration-test-token"
 
 
+def no_key_broker(store, verifier=None):
+    """A broker with real backends whose TOKEN reports no attached key.
+
+    Otherwise the broker's "prefer a security key" default sends registrations to whatever is
+    plugged into the machine running the tests — which made these tests pass or fail depending on
+    whether the key happened to be responsive.
+    """
+    token = TokenBackend()
+    token.available = lambda: False
+    return PasskeyBroker(store=store,
+                         verifier=verifier if verifier is not None else NullVerifier(True),
+                         backends={"software": SoftwareBackend(), "token": token})
+
+
 class ServerCase(unittest.TestCase):
     def setUp(self):
         self.store = CredentialStore(pathlib.Path(tempfile.mkdtemp()))
-        # Real backends, but the token reports NO attached key. Otherwise the broker's
-        # "prefer a security key" default would make these transport tests depend on whatever
-        # happens to be plugged into the machine running them.
-        token = TokenBackend()
-        token.available = lambda: False
-        self.broker = PasskeyBroker(store=self.store, verifier=NullVerifier(True),
-                                    backends={"software": SoftwareBackend(), "token": token})
+        self.broker = no_key_broker(self.store)
         self.server = BrokerServer(self.broker, token=TOKEN)
         self.server.start()
         self.base = "http://127.0.0.1:%d" % self.server.port
@@ -69,7 +77,7 @@ class ServerCase(unittest.TestCase):
 class Health(unittest.TestCase):
     def setUp(self):
         self.store = CredentialStore(pathlib.Path(tempfile.mkdtemp()))
-        self.server = BrokerServer(PasskeyBroker(store=self.store, verifier=NullVerifier()),
+        self.server = BrokerServer(no_key_broker(self.store, verifier=NullVerifier()),
                                    token=TOKEN)
         self.server.start()
         self.base = "http://127.0.0.1:%d" % self.server.port
@@ -208,8 +216,7 @@ class Cors(unittest.TestCase):
 
     def setUp(self):
         store = CredentialStore(pathlib.Path(tempfile.mkdtemp()))
-        self.server = BrokerServer(PasskeyBroker(store=store, verifier=NullVerifier(True)),
-                                   token=TOKEN)
+        self.server = BrokerServer(no_key_broker(store), token=TOKEN)
         self.server.start()
         self.base = "http://127.0.0.1:%d" % self.server.port
 

@@ -85,7 +85,7 @@ class DeclinedNeverPersists(unittest.TestCase):
 class TokenAlwaysRequired(unittest.TestCase):
     def setUp(self):
         self.store = CredentialStore(pathlib.Path(tempfile.mkdtemp()))
-        self.server = BrokerServer(PasskeyBroker(store=self.store, verifier=NullVerifier()),
+        self.server = BrokerServer(no_key_broker(self.store, verifier=NullVerifier()),
                                    token="regression-token")
         self.server.start()
         self.base = "http://127.0.0.1:%d" % self.server.port
@@ -116,8 +116,7 @@ class TokenAlwaysRequired(unittest.TestCase):
 
 class ClientDataEchoed(unittest.TestCase):
     def test_response_client_data_is_the_exact_input(self):
-        broker = PasskeyBroker(store=CredentialStore(pathlib.Path(tempfile.mkdtemp())),
-                               verifier=NullVerifier(True))
+        broker = no_key_broker(CredentialStore(pathlib.Path(tempfile.mkdtemp())))
         result = broker.register("example.com", CD)
         echoed = w.b64u_decode(result["credential"]["response"]["clientDataJSON"])
         self.assertEqual(echoed, w.b64u_decode(CD))

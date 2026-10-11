@@ -12,10 +12,9 @@ Two facts have to hold at once:
   * **Registration must work.** The bridge has to be present on a site we hold NOTHING for, or a
     brand-new passkey could never be created (the daemon would answer "no credential" for the
     very site you are trying to register on). So "install" cannot mean "a credential exists".
-  * **Some hosts can be blocked.** A host that misbehaves on your machine can be kept out of the
-    bridge entirely with ``passkey-broker block <host>``. Nothing is blocked by default: passkeys
-    are needed on exactly the sign-in hosts that used to be on that list, and the override is now
-    installed in a shape a page cannot detect (see the bridge's swapMethod).
+  * **Some hosts must never be touched.** Google's sign-in is refused the moment the WebAuthn API
+    is overridden - measured for both shapes the bridge has had, including one a page cannot
+    detect - so those hosts are blocked and the bridge stays out of the way entirely.
 
 Hence: ``install`` is a property of the HOST (blocked or not), and ``has`` is the separate fact
 the bridge uses to decide whether to advertise a platform authenticator. Blocked hosts default to
@@ -29,31 +28,34 @@ import pathlib
 
 import broker_paths
 
-# Hosts whose sign-in flow must not be touched.
+# Hosts whose sign-in flow must not be touched. Both the Google and the Microsoft sign-in hosts are
+# here, and that is a MEASURED result rather than a precaution:
 #
-# This list used to hold google.com and the Microsoft sign-in hosts. Both entries rested on
-# observations that are no longer true:
+#   * Google's sign-in refuses a browser whose WebAuthn API has been overridden: "This browser or
+#     app may not be secure", shown at page LOAD. It does so for BOTH shapes this bridge has had —
+#     the original own-property-on-navigator override built from plain JS functions, AND the
+#     prototype-level Proxy-wrapped replacement that leaves no own property anywhere, keeps
+#     name/length and still reports "[native code]" under Function.prototype.toString. Whatever
+#     signal that check reads, the override is what trips it, so the bridge stays out of that host.
 #
-#   * Google refused the sign-in because the override was installed as an OWN property on the
-#     navigator instance, with plain JS functions — trivially detectable, and it read as a
-#     tampered browser ("This browser or app may not be secure"). The bridge now patches
-#     CredentialsContainer.prototype instead and wraps the native methods in a Proxy, so no own
-#     property appears and Function.prototype.toString still reports "[native code]". That
-#     detectable shape was the entire cause.
+#   * The Microsoft sign-in hosts start a WebAuthn ceremony and then wait on it ("a security window
+#     will open"); with the bridge installed that ceremony has nothing to answer with.
 #
-#   * The Microsoft hang was a ceremony started against a broker that held nothing for the site.
-#     That is a question about the STORE, not the host — and a passkey is exactly what those
-#     hosts are asking for.
+# The consequence, stated plainly: PASSKEYS CANNOT BE USED ON GOOGLE OR MICROSOFT SIGN-IN in this
+# browser. QtWebEngine cannot reach a cross-platform authenticator by itself (measured:
+# navigator.credentials.create hangs, no dialog, no result), and it cannot override the API on those
+# hosts without being refused. Password sign-in is the supported path there. Passkeys still work on
+# hosts that do not check — github, and everything else.
 #
-# Passkeys need this API at all: QtWebEngine cannot reach a cross-platform authenticator on its
-# own (measured: navigator.credentials.create simply hangs, no dialog, no result). Blocking the
-# sign-in hosts therefore made passkeys impossible on precisely the sites that use them.
-#
-# The list stays available — "passkey-broker block <host>" — for a host that misbehaves on YOUR
-# machine.
-#
-# Suffix-matched: "google.com" would also cover accounts.google.com and myaccount.google.com.
-DEFAULT_BLOCKED: tuple = ()
+# Suffix-matched: "google.com" also covers accounts.google.com and myaccount.google.com.
+DEFAULT_BLOCKED = (
+    "google.com",
+    "login.live.com",
+    "account.live.com",
+    "login.microsoftonline.com",
+    "login.microsoft.com",
+    "account.microsoft.com",
+)
 
 
 def _normalise(host):

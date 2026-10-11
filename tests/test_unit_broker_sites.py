@@ -25,22 +25,19 @@ def policy(blocked=None):
 
 
 class Defaults(unittest.TestCase):
-    def test_nothing_is_blocked_out_of_the_box(self):
-        # Passkeys are served by overriding WebAuthn, and that is needed on exactly the sign-in
-        # hosts that used to be blocked here: QtWebEngine cannot reach a cross-platform key on its
-        # own. The override is now installed in a shape a page cannot see (a prototype patch behind
-        # a Proxy - no own property, still "[native code]"), so nothing needs blocking up front.
-        self.assertEqual((), tuple(DEFAULT_BLOCKED))
-        for host in ("google.com", "accounts.google.com", "login.live.com",
-                     "account.live.com", "login.microsoftonline.com", "login.microsoft.com",
-                     "account.microsoft.com"):
-            self.assertFalse(policy().is_blocked(host),
-                             "%s must be reachable: that is where the passkey is used" % host)
+    def test_the_sign_in_hosts_are_blocked_out_of_the_box(self):
+        # Measured, twice over: Google refuses the sign-in whenever the WebAuthn API has been
+        # overridden - including a prototype-level, Proxy-wrapped replacement that leaves no own
+        # property and still reports "[native code]". QtWebEngine cannot reach a cross-platform key
+        # by itself, so the bridge stays out of these hosts and password sign-in is what works.
+        for host in ("google.com", "accounts.google.com", "login.live.com", "account.live.com",
+                     "login.microsoftonline.com", "login.microsoft.com", "account.microsoft.com"):
+            self.assertTrue(policy().is_blocked(host), "%s must be blocked" % host)
+        for entry in ("google.com", "login.live.com", "login.microsoftonline.com"):
+            self.assertIn(entry, DEFAULT_BLOCKED)
 
-    def test_subdomains_of_an_explicitly_blocked_host_are_blocked(self):
+    def test_subdomains_of_a_blocked_host_are_blocked(self):
         p = policy()
-        p.block("google.com")
-        self.assertTrue(p.is_blocked("google.com"))
         self.assertTrue(p.is_blocked("accounts.google.com"))
         self.assertTrue(p.is_blocked("myaccount.google.com"))
 
@@ -50,14 +47,13 @@ class Defaults(unittest.TestCase):
         self.assertFalse(p.is_blocked("example.org"))
         self.assertFalse(p.is_blocked("accounts.youtube.com"))
 
-    def test_the_sign_in_hosts_are_reachable(self):
-        # These were blocked while the override was detectable (their flow then either refused the
-        # browser or waited on a ceremony that could not complete). Now that the override is
-        # invisible to the page, they are exactly where the passkey must work.
+    def test_the_sign_in_hosts_are_blocked(self):
+        # Blocked because the override itself is refused there, whatever shape it takes, and the
+        # engine cannot reach a cross-platform key without it.
         p = policy()
         for host in ("login.live.com", "account.live.com", "login.microsoftonline.com",
                      "login.microsoft.com", "account.microsoft.com", "accounts.google.com"):
-            self.assertFalse(p.is_blocked(host), "%s must NOT be blocked by default" % host)
+            self.assertTrue(p.is_blocked(host), "%s must be blocked by default" % host)
 
     def test_a_lookalike_domain_is_not_blocked(self):
         # "notgoogle.com" must not be caught by the "google.com" entry: suffix matching has to

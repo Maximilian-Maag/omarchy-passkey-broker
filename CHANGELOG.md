@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.2.4
+
+### Changed
+- **The sign-in hosts are blocked again, because the bridge is refused there whatever shape it
+  takes.** 1.2.3 removed that block on the theory that the refusal came from the override being
+  detectable — an own property on `navigator`, plain JS functions. That theory was measured wrong:
+  with the prototype-level, Proxy-wrapped override (no own property anywhere, `name`/`length`
+  intact, `Function.prototype.toString` still reporting `[native code]`) Google's sign-in still
+  answers **"This browser or app may not be secure"**. Whatever signal that check reads, the
+  override is what trips it.
+
+  The honest position, now written into the code and its tests: **passkeys cannot be used on the
+  Google or Microsoft sign-in in this browser.** QtWebEngine cannot reach a cross-platform
+  authenticator on its own (`navigator.credentials.create()` hangs, no dialog, no result), and it
+  cannot override the WebAuthn API on those hosts without being refused. Password sign-in is the
+  supported path there; passkeys keep working on hosts that do not check, github included.
+
+  On an existing machine the store is set with `passkey-broker block <host>`, which needs a broker
+  restart — the policy is cached in memory and the CLI writes the file.
+
 ## 1.2.3
 
 ### Fixed

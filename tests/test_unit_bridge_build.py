@@ -13,6 +13,10 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "bin"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))  # tests/ (for _isolation)
+from _isolation import isolate  # noqa: E402
+
+setUpModule, tearDownModule = isolate()
 import bridge_build  # noqa: E402
 import broker_paths  # noqa: E402
 
@@ -124,6 +128,57 @@ class Install(unittest.TestCase):
         written = bridge_build.install("// s\n", targets=[target])
         self.assertEqual(written, [str(target / "qute-passkey.js")])
         self.assertTrue((target / "qute-passkey.js").is_file())
+
+
+class GreasemonkeyDirs(unittest.TestCase):
+    """The install target must be XDG-scoped. Hardcoding $HOME let the e2e test (via `serve`)
+    write a dead bridge into the developer's real qutebrowser and break their sign-in."""
+
+    def setUp(self):
+        self._saved = {k: os.environ.get(k) for k in ("XDG_DATA_HOME", "XDG_CONFIG_HOME")}
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_honours_xdg(self):
+        os.environ["XDG_DATA_HOME"] = "/tmp/xdgd"
+        os.environ["XDG_CONFIG_HOME"] = "/tmp/xdgc"
+        self.assertEqual(bridge_build.greasemonkey_dirs(),
+                         [pathlib.Path("/tmp/xdgd/qutebrowser/greasemonkey"),
+                          pathlib.Path("/tmp/xdgc/qutebrowser/greasemonkey")])
+
+    def test_falls_back_to_home(self):
+        os.environ.pop("XDG_DATA_HOME", None)
+        os.environ.pop("XDG_CONFIG_HOME", None)
+        dirs = bridge_build.greasemonkey_dirs()
+        self.assertEqual(dirs[0], pathlib.Path.home() / ".local/share/qutebrowser/greasemonkey")
+        self.assertEqual(dirs[1], pathlib.Path.home() / ".config/qutebrowser/greasemonkey")
+
+    def test_default_install_stays_inside_xdg(self):
+        # Patch Path.home to a throwaway dir: under MUTATION this test runs against a mutant
+        # that ignores XDG, and the fallback would otherwise write into the developer's REAL
+        # ~/.local/share. The assertion still fails the mutant, but the side effect must not
+        # escape the test.
+        fake_home = pathlib.Path(tempfile.mkdtemp())
+        xdg_data = tempfile.mkdtemp()
+        xdg_config = tempfile.mkdtemp()
+        os.environ["XDG_DATA_HOME"] = xdg_data
+        os.environ["XDG_CONFIG_HOME"] = xdg_config
+        original_home = pathlib.Path.home
+        pathlib.Path.home = classmethod(lambda cls: fake_home)
+        try:
+            written = bridge_build.install("// bridge\n")
+        finally:
+            pathlib.Path.home = original_home
+        self.assertEqual(len(written), 2)                   # the data dir AND the config dir
+        for path in written:
+            self.assertTrue(pathlib.Path(path).is_file())
+            self.assertNotIn(str(fake_home), path)          # never the $HOME fallback
+            self.assertTrue(path.startswith(xdg_data) or path.startswith(xdg_config), path)
 
 
 if __name__ == "__main__":

@@ -16,6 +16,15 @@ PY="${PYTHON:-python3}"
 NODE="${NODE:-node}"
 
 export XDG_STATE_HOME="$(mktemp -d)"
+# Redirect DATA/CONFIG too: `serve` installs the bridge into the greasemonkey dir, and without
+# this it lands in the developer's REAL qutebrowser profile (a stale bridge pointing at this
+# throwaway daemon). The install target must be XDG-scoped for the test to be safe.
+export XDG_DATA_HOME="$(mktemp -d)"
+export XDG_CONFIG_HOME="$(mktemp -d)"
+# Guard the failure mode that actually bit us: a bridge written into the developer's REAL
+# qutebrowser profile (a stale bridge pointing at this throwaway daemon). Fail loudly if it appears.
+REAL_BRIDGE="$HOME/.local/share/qutebrowser/greasemonkey/qute-passkey.js"
+REAL_BRIDGE_EXISTED=0; [ -e "$REAL_BRIDGE" ] && REAL_BRIDGE_EXISTED=1
 STATE="$XDG_STATE_HOME/omarchy-passkey-broker"
 SRV=""
 cleanup() { [ -n "$SRV" ] && kill "$SRV" 2>/dev/null; }
@@ -42,5 +51,9 @@ BROKER_PORT="$PORT" BROKER_TOKEN="$TOKEN" "$NODE" "$REPO/tests/js/e2e_bridge_dri
     || fail "bridge driver failed"
 
 "$PY" "$REPO/tests/e2e/verify_ceremony.py" "$OUT" || fail "ceremony verification failed"
+
+# Nothing may have leaked into the real browser profile.
+[ "$REAL_BRIDGE_EXISTED" -eq 0 ] && [ -e "$REAL_BRIDGE" ] \
+    && fail "the e2e wrote into the real qutebrowser profile: $REAL_BRIDGE"
 
 echo "e2e bridge <-> broker: PASS"

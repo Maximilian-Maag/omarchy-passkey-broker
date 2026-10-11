@@ -10,6 +10,10 @@ import sys
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "bin"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))  # tests/ (for _isolation)
+from _isolation import isolate  # noqa: E402
+
+setUpModule, tearDownModule = isolate()
 import broker_verify  # noqa: E402
 from broker_verify import FprintdVerifier, NullVerifier  # noqa: E402
 

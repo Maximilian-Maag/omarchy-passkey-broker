@@ -12,6 +12,10 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "bin"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))  # tests/ (for _isolation)
+from _isolation import isolate  # noqa: E402
+
+setUpModule, tearDownModule = isolate()
 import webauthn_core as w  # noqa: E402
 from broker import PasskeyBroker  # noqa: E402
 from broker_store import CredentialStore  # noqa: E402

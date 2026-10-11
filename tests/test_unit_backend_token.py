@@ -13,6 +13,10 @@ import sys
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "bin"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))  # tests/ (for _isolation)
+from _isolation import isolate  # noqa: E402
+
+setUpModule, tearDownModule = isolate()
 import webauthn_core as w  # noqa: E402
 from backend_token import TokenBackend, TokenError, _has_builtin_uv  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric import ec  # noqa: E402

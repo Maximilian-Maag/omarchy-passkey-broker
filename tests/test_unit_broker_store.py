@@ -14,6 +14,10 @@ import time
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "bin"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))  # tests/ (for _isolation)
+from _isolation import isolate  # noqa: E402
+
+setUpModule, tearDownModule = isolate()
 from broker_store import CredentialStore  # noqa: E402
 
 

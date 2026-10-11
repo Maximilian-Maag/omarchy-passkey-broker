@@ -12,6 +12,7 @@ exactly the failure this whole plugin exists to fix.
 """
 import argparse
 import json
+import os
 import pathlib
 import re
 import sys
@@ -24,10 +25,20 @@ SOURCE = REPO / "userscripts" / "qute-passkey.js"
 # The exact line the source ships with; replaced wholesale with the live config.
 CONFIG_RE = re.compile(r"^(\s*var CONFIG = )\{.*?\};", re.M)
 
-GREASEMONKEY_DIRS = [
-    pathlib.Path.home() / ".local" / "share" / "qutebrowser" / "greasemonkey",
-    pathlib.Path.home() / ".config" / "qutebrowser" / "greasemonkey",
-]
+
+def greasemonkey_dirs():
+    """Where qutebrowser looks for Greasemonkey scripts.
+
+    Honours ``XDG_DATA_HOME``/``XDG_CONFIG_HOME`` rather than hardcoding ``$HOME``, so a test
+    (or a session with a redirected config) never writes into the developer's REAL browser
+    profile. This is not hypothetical: with the paths hardcoded, the end-to-end test's
+    ``passkey-broker serve`` installed a bridge pointing at a throwaway daemon into the user's
+    own qutebrowser, breaking their sign-in.
+    """
+    data = os.environ.get("XDG_DATA_HOME") or str(pathlib.Path.home() / ".local" / "share")
+    config = os.environ.get("XDG_CONFIG_HOME") or str(pathlib.Path.home() / ".config")
+    return [pathlib.Path(data) / "qutebrowser" / "greasemonkey",
+            pathlib.Path(config) / "qutebrowser" / "greasemonkey"]
 
 
 def live_config():
@@ -60,7 +71,7 @@ def render(config):
 def install(text, targets=None):
     """Write the rendered script into every greasemonkey dir. Returns the paths written."""
     written = []
-    for target_dir in (targets if targets is not None else GREASEMONKEY_DIRS):
+    for target_dir in (targets if targets is not None else greasemonkey_dirs()):
         target_dir = pathlib.Path(target_dir)
         try:
             target_dir.mkdir(parents=True, exist_ok=True)

@@ -14,7 +14,7 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "bin"))
 import webauthn_core as w  # noqa: E402
-from backend_token import TokenBackend, TokenError, _uv_supported  # noqa: E402
+from backend_token import TokenBackend, TokenError, _has_builtin_uv  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric import ec  # noqa: E402
 from fido2.cose import ES256  # noqa: E402
 from fido2.webauthn import AttestedCredentialData, AuthenticatorData  # noqa: E402
@@ -72,21 +72,23 @@ class FakeCtap:
 
 class UvSupport(unittest.TestCase):
     def test_uv_option(self):
-        self.assertTrue(_uv_supported(FakeCtap({"uv": True})))
+        self.assertTrue(_has_builtin_uv(FakeCtap({"uv": True})))
 
-    def test_client_pin_option(self):
-        self.assertTrue(_uv_supported(FakeCtap({"clientPin": True})))
+    def test_client_pin_is_not_builtin_uv(self):
+        # clientPin alone means a PIN, which is supplied via pin_uv_param, NOT options.uv;
+        # treating it as built-in UV makes makeCredential fail with UNSUPPORTED_OPTION
+        self.assertFalse(_has_builtin_uv(FakeCtap({"clientPin": True})))
 
     def test_rk_only_is_not_uv(self):
-        self.assertFalse(_uv_supported(FakeCtap({"rk": True})))
+        self.assertFalse(_has_builtin_uv(FakeCtap({"rk": True})))
 
     def test_missing_options_is_false(self):
-        self.assertFalse(_uv_supported(FakeCtap(None)))
+        self.assertFalse(_has_builtin_uv(FakeCtap(None)))
 
     def test_no_info_attribute_is_false(self):
         class Bare:
             pass
-        self.assertFalse(_uv_supported(Bare()))
+        self.assertFalse(_has_builtin_uv(Bare()))
 
 
 class Register(unittest.TestCase):
@@ -102,6 +104,19 @@ class Register(unittest.TestCase):
         self.assertEqual(rec["rp_id"], "example.com")
         self.assertEqual(rec["alg"], -7)
         self.assertEqual(rec["aaguid"], "aa" * 16)
+
+    def test_user_handle_is_preserved(self):
+        be = TokenBackend(ctap=FakeCtap())
+        rec, _ = be.register("example.com", CLIENT_CREATE, b"u1")
+        self.assertEqual(w.b64u_decode(rec["user_handle"]), b"u1")
+
+    def test_absent_user_handle_gets_a_generated_one(self):
+        # with no handle the token must still be given a NON-empty user id (an empty id is
+        # rejected / meaningless), so this is not allowed to collapse to the empty bytes
+        be = TokenBackend(ctap=FakeCtap())
+        rec, _ = be.register("example.com", CLIENT_CREATE)
+        self.assertTrue(rec["user_handle"])
+        self.assertEqual(len(w.b64u_decode(rec["user_handle"])), 16)
 
     def test_rk_requested(self):
         ctap = FakeCtap()
@@ -260,6 +275,220 @@ class AuthenticateUv(unittest.TestCase):
 
     def test_uv_not_requested_when_false(self):
         self.assertIsNone(self._assertion_options(False))
+
+
+class PinSupport(unittest.TestCase):
+    """The token's PIN path. This key (clientPin set) refuses a ceremony with PUAT_REQUIRED
+    until a PIN/UV auth token is supplied, so the backend must obtain one and pass it through,
+    and report a missing/incorrect PIN clearly rather than as an opaque CTAP code."""
+
+    class RecordingCtap(FakeCtap):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.kwargs = []
+
+        def make_credential(self, *a, **kw):
+            self.kwargs.append(kw)
+            return super().make_credential(*a, **kw)
+
+        def get_assertion(self, *a, **kw):
+            self.kwargs.append(kw)
+            return super().get_assertion(*a, **kw)
+
+    def test_no_pin_yields_no_uv_params(self):
+        self.assertEqual(TokenBackend()._uv_params(FakeCtap(), None), (None, None))
+
+    def test_pin_auth_signs_the_client_data_hash(self):
+        class Proto:
+            VERSION = 1
+
+            @staticmethod
+            def authenticate(token, message):
+                return b"SIG(" + token + b"," + message + b")"
+
+        param, protocol = TokenBackend._pin_auth(Proto(), b"tok", b"hash")
+        self.assertEqual(param, b"SIG(tok,hash)")
+        self.assertEqual(protocol, 1)
+
+    def test_pin_auth_is_absent_without_a_token(self):
+        # no token -> no pinUvAuthParam at all (not the raw None-as-value)
+        self.assertEqual(TokenBackend._pin_auth(object(), None, b"hash"), (None, None))
+
+    def test_pin_produces_a_token_and_protocol(self):
+        import fido2.ctap2.pin as pinmod
+
+        class FakeClientPin:
+            PERMISSION = pinmod.ClientPin.PERMISSION
+
+            def __init__(self, ctap):
+                self.protocol = type("P", (), {"VERSION": 3})()
+                self.seen = {}
+
+            def get_pin_token(self, value, permissions=None):
+                self.seen["pin"] = value
+                self.seen["permissions"] = permissions
+                return b"pin-token"
+
+        original = pinmod.ClientPin
+        pinmod.ClientPin = FakeClientPin
+        try:
+            proto, token = TokenBackend()._uv_params(FakeCtap(), "123456")
+        finally:
+            pinmod.ClientPin = original
+        self.assertEqual(token, b"pin-token")
+        self.assertEqual(proto.VERSION, 3)
+
+    def test_register_passes_the_pin_token(self):
+        import fido2.ctap2.pin as pinmod
+
+        class Proto:
+            VERSION = 2
+
+            @staticmethod
+            def authenticate(token, message):
+                return b"auth"
+
+        class FakeClientPin:
+            PERMISSION = pinmod.ClientPin.PERMISSION
+
+            def __init__(self, ctap):
+                self.protocol = Proto()
+
+            def get_pin_token(self, value, permissions=None):
+                return b"tok"
+
+        ctap = self.RecordingCtap({"rk": True, "clientPin": True})
+        original = pinmod.ClientPin
+        pinmod.ClientPin = FakeClientPin
+        try:
+            TokenBackend(ctap=ctap, pin="123456").register("example.com", CLIENT_CREATE)
+        finally:
+            pinmod.ClientPin = original
+        self.assertEqual(ctap.kwargs[0]["pin_uv_param"], b"auth")
+        self.assertEqual(ctap.kwargs[0]["pin_uv_protocol"], 2)
+        # with a PIN the UV flag is set by pinUvAuthParam — options.uv must NOT be sent, or a
+        # key without built-in UV answers UNSUPPORTED_OPTION
+        self.assertNotIn("uv", ctap.calls[0][4])
+
+    def test_authenticate_passes_the_pin_token(self):
+        import fido2.ctap2.pin as pinmod
+
+        class Proto:
+            VERSION = 2
+
+            @staticmethod
+            def authenticate(token, message):
+                return b"auth"
+
+        class FakeClientPin:
+            PERMISSION = pinmod.ClientPin.PERMISSION
+
+            def __init__(self, ctap):
+                self.protocol = Proto()
+
+            def get_pin_token(self, value, permissions=None):
+                return b"tok"
+
+        ctap = self.RecordingCtap({"rk": True, "clientPin": True})
+        original = pinmod.ClientPin
+        pinmod.ClientPin = FakeClientPin
+        try:
+            be = TokenBackend(ctap=ctap, pin="123456")
+            rec, _ = be.register("example.com", CLIENT_CREATE)
+            ctap.kwargs.clear()
+            be.authenticate(rec, CLIENT_GET)
+        finally:
+            pinmod.ClientPin = original
+        self.assertEqual(ctap.kwargs[0]["pin_uv_param"], b"auth")
+
+
+class ErrorTranslation(unittest.TestCase):
+    def _err(self, code):
+        from fido2.ctap import CtapError
+        return CtapError(code)
+
+    def test_puat_required_without_pin_names_the_env_var(self):
+        from backend_token import PIN_ENV
+        exc = TokenBackend._explain(self._err(0x36), None)
+        self.assertIsInstance(exc, TokenError)
+        self.assertIn(PIN_ENV, str(exc))
+
+    def test_puat_required_with_a_pin_is_not_blamed_on_the_pin(self):
+        exc = TokenBackend._explain(self._err(0x36), b"tok")
+        self.assertNotIn("set PASSKEY", str(exc))
+
+    def test_pin_invalid_is_reported(self):
+        exc = TokenBackend._explain(self._err(0x31), b"tok")
+        self.assertIn("PIN_INVALID", str(exc))
+
+    def test_pin_auth_blocked_is_reported(self):
+        exc = TokenBackend._explain(self._err(0x34), b"tok")
+        self.assertIn("blocked", str(exc))
+
+    def test_other_errors_are_generic(self):
+        exc = TokenBackend._explain(self._err(0x01), None)
+        self.assertIn("refused", str(exc))
+
+
+class TokenUvReporting(unittest.TestCase):
+    """The record/updates the token backend returns must carry the token's OWN uv outcome, so
+    the broker reports what the authenticator did rather than the local fingerprint check."""
+
+    @staticmethod
+    def _client_pin():
+        import fido2.ctap2.pin as pinmod
+
+        class Proto:
+            VERSION = 1
+
+            @staticmethod
+            def authenticate(token, message):
+                return b"auth"
+
+        class FakeClientPin:
+            PERMISSION = pinmod.ClientPin.PERMISSION
+
+            def __init__(self, ctap):
+                self.protocol = Proto()
+
+            def get_pin_token(self, value, permissions=None):
+                return b"tok"
+
+        return pinmod, FakeClientPin
+
+    def test_register_with_pin_records_uv(self):
+        pinmod, fake = self._client_pin()
+        original = pinmod.ClientPin
+        pinmod.ClientPin = fake
+        try:
+            rec, _ = TokenBackend(ctap=FakeCtap({"rk": True}), pin="123456").register(
+                "example.com", CLIENT_CREATE)
+        finally:
+            pinmod.ClientPin = original
+        self.assertTrue(rec["uv"])
+
+    def test_register_without_pin_records_no_uv(self):
+        rec, _ = TokenBackend(ctap=FakeCtap({"rk": True})).register("example.com",
+                                                                    CLIENT_CREATE)
+        self.assertFalse(rec["uv"])
+
+    def test_authenticate_reports_token_uv(self):
+        pinmod, fake = self._client_pin()
+        original = pinmod.ClientPin
+        pinmod.ClientPin = fake
+        try:
+            be = TokenBackend(ctap=FakeCtap({"rk": True}), pin="123456")
+            rec, _ = be.register("example.com", CLIENT_CREATE)
+            updates, _ = be.authenticate(rec, CLIENT_GET)
+        finally:
+            pinmod.ClientPin = original
+        self.assertTrue(updates["uv"])
+
+    def test_authenticate_without_pin_reports_no_uv(self):
+        be = TokenBackend(ctap=FakeCtap({"rk": True}))
+        rec, _ = be.register("example.com", CLIENT_CREATE)
+        updates, _ = be.authenticate(rec, CLIENT_GET)
+        self.assertFalse(updates["uv"])
 
 
 if __name__ == "__main__":

@@ -6,11 +6,27 @@ fingerprint is required, which credential answers an assertion — so the backen
 about cryptography and the server can stay about transport. Nothing here talks to a socket or
 prints; the CLI and the HTTP server both call into this.
 """
+import os
+
 import webauthn_core as w
 from backend_software import SoftwareBackend
-from backend_token import TokenBackend
+from backend_token import PIN_ENV, TokenBackend, TokenError
 from broker_store import CredentialStore
 from broker_verify import FprintdVerifier
+
+
+def _uv_reported(payload, result):
+    """The user-verification outcome to report to the caller.
+
+    Prefer what the AUTHENTICATOR reported (a token sets ``uv`` from its PIN/UV auth token);
+    fall back to the broker's own verification result. Reporting only the local fingerprint
+    check made a token that genuinely performed UV show up as ``user_verified: false`` — the
+    opposite of the truth.
+    """
+    flag = payload.get("uv")
+    if flag is None:
+        return bool(result and result.state == "verified")
+    return bool(flag)
 
 
 class PasskeyBroker:
@@ -19,7 +35,10 @@ class PasskeyBroker:
         self.verifier = verifier if verifier is not None else FprintdVerifier()
         self.backends = backends if backends is not None else {
             "software": SoftwareBackend(),
-            "token": TokenBackend(),
+            # The token's PIN comes from the environment, never argv (argv is visible in `ps`
+            # and lands in shell history). Absent it, a key that requires UV reports a clear
+            # error rather than failing obscurely.
+            "token": TokenBackend(pin=os.environ.get(PIN_ENV)),
         }
 
     # ── helpers ──────────────────────────────────────────────────────────────
@@ -59,11 +78,15 @@ class PasskeyBroker:
         ok, result = self._decide_uv(verify)
         if not ok:
             return {"ok": False, "error": result.state, "detail": result.detail}
-        record, response = be.register(rp_id, client_data, user_handle,
-                                       uv=(result.state == "verified") if result else False)
+        try:
+            record, response = be.register(
+                rp_id, client_data, user_handle,
+                uv=(result.state == "verified") if result else False)
+        except TokenError as exc:
+            return {"ok": False, "error": "token_error", "detail": str(exc)}
         self.store.save(record)
         return {"ok": True, "backend": backend,
-                "user_verified": bool(result and result.state == "verified"),
+                "user_verified": _uv_reported(record, result),
                 "credential": response}
 
     def authenticate(self, rp_id, client_data_b64u, allow_ids=None, verify=True):
@@ -83,12 +106,16 @@ class PasskeyBroker:
         if not ok:
             return {"ok": False, "error": result.state, "detail": result.detail}
         be = self._backend(record.get("backend", "software"))
-        updates, response = be.authenticate(record, client_data,
-                                            uv=(result.state == "verified") if result else False)
+        try:
+            updates, response = be.authenticate(
+                record, client_data,
+                uv=(result.state == "verified") if result else False)
+        except TokenError as exc:
+            return {"ok": False, "error": "token_error", "detail": str(exc)}
         record.update(updates)
         self.store.save(record)
         return {"ok": True, "backend": record.get("backend"),
-                "user_verified": bool(result and result.state == "verified"),
+                "user_verified": _uv_reported(updates, result),
                 "credential": response}
 
     def list_credentials(self):

@@ -71,6 +71,24 @@ In qutebrowser, run `:greasemonkey-reload` once after installing, then use a sit
 "add a passkey" flow. The bridge is re-rendered with the live port and token on every daemon
 start (`bin/passkey-bridge-build`), so it never points at a dead port.
 
+### The token's PIN
+
+A security key that has a **PIN** set will refuse credential creation with
+`CTAP2_ERR_PUAT_REQUIRED` (0x36) until a PIN/UV auth token is supplied — and a key like
+"Security Key by Yubico" has no biometric, so the PIN *is* its user verification. The broker's
+own fingerprint check is **not** a substitute: the token must be given its PIN, and only then
+does it set the UV flag the relying party checks. Supply it through the environment, never
+argv (argv is visible in `ps` and in shell history):
+
+    PASSKEY_TOKEN_PIN=123456 passkey-broker register --rp-id example.com --backend token
+
+Two CTAP details are easy to get wrong and are pinned by tests, because both were hit against
+real hardware: the option `uv` is for a **built-in sensor** and is rejected with
+`CTAP2_ERR_UNSUPPORTED_OPTION` on a PIN-only key (a PIN sets the UV flag via
+`pinUvAuthParam`), and `pinUvAuthParam` is the token **authenticating the clientDataHash**
+(`protocol.authenticate(token, client_data_hash)`), not the raw token — the raw token is
+answered with `CTAP2_ERR_PIN_AUTH_INVALID`.
+
 ## Testing
 
 The full harness is shared with the other Omarchy plugins (`tools/` is vendored byte-for-byte):
@@ -99,8 +117,12 @@ The full harness is shared with the other Omarchy plugins (`tools/` is vendored 
 
 ## Known limitations
 
-- The hardware token path is unit-tested against a fake CTAP device and the software path is
-  proven end to end; a **real** CTAP2 ceremony needs the security key attached, so it is the
-  one thing verified by hand rather than in CI.
+- The **hardware ceremony is proven**: a real "Security Key by Yubico" produced a `packed`
+  attestation (AAGUID `149a2021…`), and an assertion whose ES256 signature verifies against the
+  registered key with `UP|UV` set and an advancing sign count. It reaches the PIN/UV step, which
+  means the key must be present and its PIN supplied; CI still exercises the token path against
+  a fake CTAP device.
 - `credentials.get()` is answered from the stored credential for the relying party's id; the
   bridge does not yet implement conditional UI (`mediation: "conditional"`).
+- The daemon reads the token PIN from its own environment; an interactive PIN prompt for
+  browser-driven flows (a pinentry helper) is not implemented yet.

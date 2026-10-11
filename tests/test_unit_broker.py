@@ -184,5 +184,58 @@ class Listing(unittest.TestCase):
         self.assertFalse(b.delete(cred_id)["ok"])
 
 
+class TokenFaults(unittest.TestCase):
+    """A token that refuses (no device, or a PIN the key wants and the broker lacks) must come
+    back as a clean error dict, not an exception that takes down the daemon request."""
+
+    class BoomBackend:
+        name = "token"
+
+        def register(self, *a, **k):
+            from backend_token import TokenError
+            raise TokenError("the token requires a PIN")
+
+        def authenticate(self, *a, **k):
+            from backend_token import TokenError
+            raise TokenError("the token requires a PIN")
+
+    def test_register_reports_token_error(self):
+        b = broker(backends={"token": self.BoomBackend()})
+        r = b.register("example.com", CD, backend="token")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["error"], "token_error")
+        self.assertIn("PIN", r["detail"])
+
+    def test_authenticate_reports_token_error(self):
+        b = broker(backends={"token": self.BoomBackend()})
+        b.store.save({"cred_id": "tk", "rp_id": "example.com", "backend": "token",
+                      "sign_count": 0})
+        r = b.authenticate("example.com", CD)
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["error"], "token_error")
+
+
+class UvReporting(unittest.TestCase):
+    """`user_verified` must reflect the authenticator's UV when it reports one, and only fall
+    back to the broker's local verification otherwise."""
+
+    def setUp(self):
+        from broker import _uv_reported
+        self.report = _uv_reported
+
+    def test_authenticator_flag_wins_over_local_result(self):
+        from broker_verify import VerifyResult
+        self.assertTrue(self.report({"uv": True}, VerifyResult(False, "declined")))
+        self.assertFalse(self.report({"uv": False}, VerifyResult(True, "verified")))
+
+    def test_falls_back_to_local_verification(self):
+        from broker_verify import VerifyResult
+        self.assertTrue(self.report({}, VerifyResult(True, "verified")))
+        self.assertFalse(self.report({}, VerifyResult(False, "declined")))
+
+    def test_no_result_and_no_flag_is_false(self):
+        self.assertFalse(self.report({}, None))
+
+
 if __name__ == "__main__":
     unittest.main()

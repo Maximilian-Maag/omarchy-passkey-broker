@@ -193,5 +193,52 @@ class FullCeremony(ServerCase):
                          b"handle-123")
 
 
+class Cors(unittest.TestCase):
+    """The bridge is a page script, so its requests to this loopback server are cross-origin and
+    the browser enforces CORS. Without these headers the response is blocked and the bridge
+    reports 'broker unreachable' on every site (observed live before this was added)."""
+
+    def setUp(self):
+        store = CredentialStore(pathlib.Path(tempfile.mkdtemp()))
+        self.server = BrokerServer(PasskeyBroker(store=store, verifier=NullVerifier(True)),
+                                   token=TOKEN)
+        self.server.start()
+        self.base = "http://127.0.0.1:%d" % self.server.port
+
+    def tearDown(self):
+        self.server.stop()
+
+    def _headers(self, path, method="GET", data=None, token=TOKEN):
+        req = urllib.request.Request(self.base + path, data=data, method=method)
+        if token is not None:
+            req.add_header("X-Broker-Token", token)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.status, resp.headers
+        except urllib.error.HTTPError as exc:
+            headers = exc.headers
+            exc.close()
+            return exc.code, headers
+
+    def test_health_allows_a_cross_origin_read(self):
+        status, headers = self._headers("/health")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Access-Control-Allow-Origin"], "*")
+
+    def test_preflight_is_answered(self):
+        # the bridge sends Content-Type and X-Broker-Token, so the browser preflights with OPTIONS
+        status, headers = self._headers("/register", method="OPTIONS")
+        self.assertEqual(status, 204)
+        self.assertEqual(headers["Access-Control-Allow-Origin"], "*")
+        self.assertIn("X-Broker-Token", headers["Access-Control-Allow-Headers"])
+        self.assertIn("POST", headers["Access-Control-Allow-Methods"])
+
+    def test_an_error_response_also_carries_cors(self):
+        # a 403 with no CORS header reads as a network error to the page, not as a refusal
+        status, headers = self._headers("/register", method="POST", data=b"{}", token=None)
+        self.assertEqual(status, 403)
+        self.assertEqual(headers["Access-Control-Allow-Origin"], "*")
+
+
 if __name__ == "__main__":
     unittest.main()

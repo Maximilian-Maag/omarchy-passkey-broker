@@ -48,19 +48,45 @@ def build_stamp(directory=None):
 class _Handler(BaseHTTPRequestHandler):
     server_version = "passkey-broker"
 
+    # The bridge runs as a page script, so its XHR to this loopback server is CROSS-ORIGIN (the
+    # page's origin differs by port) and the browser applies CORS. Without these headers the
+    # response is blocked and the bridge reports "broker unreachable" on every site, and the
+    # platform-authenticator probe never resolves true. A wildcard origin is safe here because
+    # every mutating route is still gated on the token, which only the bridge (a userscript with
+    # it baked in) can present — a page that lacks the token gets a 403 and learns nothing.
+    CORS_HEADERS = (
+        ("Access-Control-Allow-Origin", "*"),
+        ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
+        ("Access-Control-Allow-Headers", "Content-Type, X-Broker-Token"),
+        ("Access-Control-Max-Age", "600"),
+    )
+
     # Silence the default stderr logging: the daemon is not a chatty service.
     def log_message(self, *args):
         pass
 
     # ── plumbing ──────────────────────────────────────────────────────────────
 
+    def _cors(self):
+        for name, value in self.CORS_HEADERS:
+            self.send_header(name, value)
+
     def _send(self, code, payload):
         body = json.dumps(payload).encode()
         self.send_response(code)
+        self._cors()
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def do_OPTIONS(self):
+        # CORS preflight: the bridge sends Content-Type and X-Broker-Token, both of which make
+        # the request non-simple, so the browser asks this first.
+        self.send_response(204)
+        self._cors()
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def _token_ok(self):
         supplied = self.headers.get("X-Broker-Token", "")

@@ -164,18 +164,45 @@
         var PKC = window.PublicKeyCredential;
         if (!PKC) { return; }
         // Without this the page concludes "no platform authenticator" and never offers the
-        // passkey path at all — the single most common reason a passkey flow silently never
-        // appears in QtWebEngine.
+        // passkey path at all. It is only set when the daemon can actually answer (see
+        // install): claiming a platform authenticator we cannot serve steers a sign-in page
+        // into a passkey ceremony that then fails.
         try { PKC.isUserVerifyingPlatformAuthenticatorAvailable = function () { return Promise.resolve(true); }; }
         catch (e) { /* frozen object: the override below still covers the ceremony */ }
         try { PKC.isConditionalMediationAvailable = function () { return Promise.resolve(false); }; }
         catch (e) { /* optional */ }
     }
 
+    function credentialsLookNative() {
+        var creds = window.navigator && window.navigator.credentials;
+        return !!(creds && typeof creds.create === "function" && typeof creds.get === "function");
+    }
+
+    function probeHealthy() {
+        // A synchronous localhost probe, so install() can know whether to advertise. Sync XHR
+        // is deprecated but this is a single loopback call at document-start; a failure to
+        // probe is treated as "not healthy".
+        if (!CONFIG.port) { return false; }
+        try {
+            var xhr = new XMLHttpRequest();
+            xhr.open("GET", "http://127.0.0.1:" + CONFIG.port + "/health", false);
+            xhr.send(null);
+            return xhr.status === 200;
+        } catch (e) { return false; }
+    }
+
     function install(cfg) {
         if (cfg) { CONFIG = cfg; }
         if (!CONFIG.port || !window.navigator) { return false; }
-        installPublicKeyCredentialStatics();
+        // Respect a deliberate opt-out. The Google/Microsoft sign-in compatibility shim removes
+        // PublicKeyCredential and navigator.credentials.create/get so those flows offer a
+        // password instead of a passkey that cannot complete in QtWebEngine. Re-installing them
+        // turns a working sign-in into "Couldn't sign you in", so stay out of the way.
+        if (!window.PublicKeyCredential) { return false; }
+        if (!credentialsLookNative()) { return false; }
+        // Only claim a platform authenticator when the daemon is actually reachable; a page
+        // that asks first must not be steered into a ceremony we cannot serve.
+        if (probeHealthy()) { installPublicKeyCredentialStatics(); }
         var orig = window.navigator.credentials;
         var bridge = Object.create(orig || Object.prototype);
         bridge.create = create;
@@ -199,7 +226,9 @@
         toAssertionCredential: toAssertionCredential,
         create: create,
         get: get,
-        install: install
+        install: install,
+        probeHealthy: probeHealthy,
+        credentialsLookNative: credentialsLookNative
     };
     if (typeof window !== 'undefined') {
         window.__passkeyBridge = api;

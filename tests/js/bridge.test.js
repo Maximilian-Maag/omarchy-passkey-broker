@@ -19,9 +19,16 @@ const SOURCE = fs.readFileSync(
 
 // A page stand-in plus a request handler the test controls. `config === null` loads the source
 // EXACTLY as it ships (with its placeholder CONFIG), which is what the default-config test wants.
-function loadBridge(config, handler) {
+// `native: false` simulates a page that has deliberately removed WebAuthn.
+function loadBridge(config, handler, opts) {
+    opts = opts || {};
     const requests = [];
-    let navigatorObj = {};
+    // A native navigator.credentials, so install() sees the platform's own create/get.
+    const nativeCreds = opts.native === false ? {} : {
+        create: function nativeCreate() { return Promise.reject(new Error('native create')); },
+        get: function nativeGet() { return Promise.reject(new Error('native get')); }
+    };
+    const navigatorObj = { credentials: nativeCreds };
 
     class FakeXHR {
         constructor() { this.headers = {}; this.responseText = ''; this.status = 0; }
@@ -35,12 +42,13 @@ function loadBridge(config, handler) {
             this.status = reply.status || 200;
             this.responseText = JSON.stringify(reply.body);
             if (this.onload) { this.onload(); }
+            if (this.status !== 200 && this.onerror) { this.onerror(new Error('http ' + this.status)); }
         }
     }
 
     const windowObj = {
         location: { origin: 'https://example.com', hostname: 'example.com' },
-        PublicKeyCredential: function () {},
+        PublicKeyCredential: opts.noPublicKeyCredential ? undefined : function () {},
         XMLHttpRequest: FakeXHR
     };
     Object.defineProperty(windowObj, 'navigator', {
@@ -61,7 +69,10 @@ function loadBridge(config, handler) {
         ? SOURCE
         : SOURCE.replace(/var CONFIG = \{.*?\};/, 'var CONFIG = ' + JSON.stringify(config) + ';');
     vm.runInContext(source, sandbox, { filename: 'qute-passkey.js' });
-    return { bridge: sandbox.window.__passkeyBridge, requests,
+    // install() runs at load and may probe /health; keep those out of the per-test assertions.
+    const initial = requests.slice();
+    requests.length = 0;
+    return { bridge: sandbox.window.__passkeyBridge, requests, initial,
              navigator: sandbox.window.navigator, window: sandbox.window };
 }
 
@@ -255,4 +266,46 @@ test('the platform-authenticator probes are answered', async () => {
         .isUserVerifyingPlatformAuthenticatorAvailable(), true);
     assert.strictEqual(await window.PublicKeyCredential
         .isConditionalMediationAvailable(), false);
+});
+
+// ── fail-safe behaviour: the bridge must not break a page it cannot serve ────────────────
+
+test('install() backs off when PublicKeyCredential was deliberately removed', () => {
+    // this is the Google/Microsoft sign-in compat shim: it deletes WebAuthn so the page offers
+    // a password. Re-installing it turns a working sign-in into "Couldn't sign you in".
+    const { bridge, navigator } = loadBridge(CFG, () => ({}), { noPublicKeyCredential: true });
+    assert.strictEqual(bridge.install(), false);
+    assert.strictEqual(navigator.credentials.create.name, 'nativeCreate');
+    assert.strictEqual(navigator.credentials.get.name, 'nativeGet');
+});
+
+test('install() backs off when navigator.credentials cannot do create/get', () => {
+    const { bridge, navigator } = loadBridge(CFG, () => ({}), { native: false });
+    assert.strictEqual(bridge.install(), false);
+    assert.strictEqual(navigator.credentials.create, undefined);
+});
+
+test('the platform-authenticator statics are only installed when the daemon answers', () => {
+    const { window } = loadBridge(CFG, (req) => req.url.endsWith('/health')
+        ? { status: 500, body: { ok: false } } : { body: {} });
+    // an unreachable daemon must NOT make the page think a platform authenticator exists
+    assert.strictEqual(window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable,
+                       undefined);
+});
+
+test('probeHealthy is false without a configured port', () => {
+    const { bridge } = loadBridge({ port: 0, token: '' }, () => ({}));
+    assert.strictEqual(bridge.probeHealthy(), false);
+});
+
+test('probeHealthy is true when /health answers 200', () => {
+    const { bridge } = loadBridge(CFG, () => ({ body: { ok: true } }));
+    assert.strictEqual(bridge.probeHealthy(), true);
+});
+
+test('install() reports the native credentials check', () => {
+    const native = loadBridge(CFG, () => ({}));
+    assert.strictEqual(native.bridge.credentialsLookNative(), true);
+    const stripped = loadBridge(CFG, () => ({}), { native: false });
+    assert.strictEqual(stripped.bridge.credentialsLookNative(), false);
 });

@@ -90,6 +90,20 @@ real hardware: the option `uv` is for a **built-in sensor** and is rejected with
 (`protocol.authenticate(token, client_data_hash)`), not the raw token — the raw token is
 answered with `CTAP2_ERR_PIN_AUTH_INVALID`.
 
+### It stays out of the way of a page that opted out
+
+QtWebEngine cannot complete a WebAuthn ceremony, so a companion shim (omarchy-qutebrowser's
+`google-signin-compat.js`) deletes `PublicKeyCredential` and `navigator.credentials.create/get`
+on the Google/Microsoft sign-in hosts, which makes those pages offer a **password** instead of a
+passkey that would hang.
+
+The bridge must not undo that. It therefore declines to install when
+`window.PublicKeyCredential` is absent, or when `navigator.credentials` has no native
+`create`/`get` — i.e. when the page has deliberately opted out — and it only advertises a
+platform authenticator (`isUserVerifyingPlatformAuthenticatorAvailable → true`) after a
+`/health` probe confirms the daemon is reachable. Claiming a platform authenticator the broker
+cannot serve is exactly what turns a working sign-in into *"Couldn't sign you in"*.
+
 ## Testing
 
 The full harness is shared with the other Omarchy plugins (`tools/` is vendored byte-for-byte):

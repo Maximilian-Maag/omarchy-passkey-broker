@@ -36,12 +36,12 @@ echo "  Plugin files -> $DEST"
 # ships neither, and a systemd --user service cannot rely on a shell PATH that might point at
 # a mise/pyenv interpreter, so the deps go in a venv beside the plugin and everything points at
 # it explicitly. That is also what CI does, so the two stay in step.
-if [[ ! -x "$VENV/bin/python" ]]; then
-  echo "  Creating venv at $VENV"
-  python3 -m venv "$VENV"
-fi
-"$VENV/bin/pip" install --quiet --upgrade pip
-"$VENV/bin/pip" install --quiet cryptography fido2
+#
+# ensure_venv REBUILDS the venv when its interpreter can no longer import those deps — the trap
+# a version manager springing its `latest` alias onto a new Python creates. A bare existence
+# test is not enough and cost a night of crash-looping here; see tools/ensure_venv.sh.
+source "$PLUGIN_DIR/tools/ensure_venv.sh"
+ensure_venv "$VENV"
 echo "  Dependencies OK: $("$VENV/bin/python" -c 'import cryptography;print("cryptography", cryptography.__version__)')"
 
 # ── 3. CLI wrappers on PATH ───────────────────────────────────────────────────
@@ -63,6 +63,13 @@ cat > "$UNIT_DIR/passkey-broker.service" <<EOF
 [Unit]
 Description=Omarchy passkey broker (WebAuthn authenticator)
 After=graphical-session.target
+# A broken daemon must FAIL, not spin. Without a limit, Restart=on-failure retries forever, so a
+# start-time error (a venv that cannot import its deps, say) becomes an invisible 2-second crash
+# loop that burns CPU for hours and leaves passkeys silently dead. Five tries in a minute is
+# enough to ride out a real transient; past that the unit goes failed and \`systemctl --user
+# status passkey-broker\` says so.
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 ExecStart=$VENV/bin/python $DEST/bin/passkey-broker serve

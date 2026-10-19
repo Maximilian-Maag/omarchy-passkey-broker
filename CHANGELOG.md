@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.2.5
+
+### Fixed
+- **The daemon can no longer crash-loop forever on a broken venv, and the venv repairs itself.**
+  `install.sh` created the venv once and thereafter only checked that `$VENV/bin/python` *exists*.
+  But that file is a SYMLINK to whatever interpreter built the venv, and a version manager (mise,
+  pyenv, asdf) keeps it behind a moving alias: when `.../python/latest` moved 3.14 -> 3.15, the
+  symlink followed onto a 3.15 interpreter that could not see the venv's `lib/python3.14`
+  site-packages. `bin/python` was still executable, so the existence test passed, nothing was
+  repaired, and the daemon died at import with `ModuleNotFoundError: No module named
+  'cryptography'`. `Restart=on-failure` then turned that into an **~18000-restart crash loop** -
+  measured here, a 2-second CPU burn all night with the passkey service silently down.
+
+  `tools/ensure_venv.sh` replaces the existence test with a FUNCTIONAL one (can the interpreter
+  `import cryptography, fido2`?) and rebuilds the venv when it cannot, from a *resolved*
+  interpreter path so the fresh venv does not follow the same alias into the next bump. A healthy
+  venv is left untouched, so re-running `install.sh` stays a no-op. Covered by
+  `tests/shell/test_ensure_venv.sh`.
+
+- **The systemd unit fails instead of spinning.** `Restart=on-failure` with no limit retried a
+  start-time error forever. `StartLimitIntervalSec=60` / `StartLimitBurst=5` now cap it: past five
+  failed starts in a minute the unit goes `failed`, which `systemctl --user status passkey-broker`
+  reports, rather than looping invisibly.
+
 ## 1.2.4
 
 ### Changed

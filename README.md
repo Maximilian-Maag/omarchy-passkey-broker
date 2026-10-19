@@ -72,6 +72,11 @@ In qutebrowser, run `:greasemonkey-reload` once after installing, then use a sit
 "add a passkey" flow. The bridge is re-rendered with the live port and token on every daemon
 start (`bin/passkey-bridge-build`), so it never points at a dead port.
 
+Re-running `install.sh` is safe and idempotent: it checks the venv's interpreter can actually
+import `cryptography`/`fido2` and rebuilds the venv only when it cannot (a version manager
+moving its `latest` Python leaves a venv that looks fine but is not — see
+`tools/ensure_venv.sh`).
+
 ### The token's PIN
 
 A security key that has a **PIN** set will refuse credential creation with
@@ -119,6 +124,7 @@ The full harness is shared with the other Omarchy plugins (`tools/` is vendored 
 | integration | `tests/test_integration_*.py` (real HTTP server, real ceremony) |
 | e2e | `tests/e2e/test_*.sh` (real bridge JS → real daemon → RP-side verification) |
 | js | `tests/js/*.test.js` (`node --test`, bridge in a `node:vm` page) |
+| shell | `tests/shell/test_*.sh` (e.g. the venv-repair guard) |
 | mutation | `tools/mutator.py` against `tests/mutation.json` |
 | policy | `tools/policy_check.py` against `policy.json` |
 

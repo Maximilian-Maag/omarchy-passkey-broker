@@ -119,6 +119,19 @@
     }
 
     // ── the intercepted calls ────────────────────────────────────────────────
+    //
+    // `nativeGet` is the engine's own assertion function, captured BEFORE the prototype is
+    // patched. `brokerHas` says whether the broker actually holds a credential for this host.
+    //
+    // An EXISTING security key is precisely the case the broker cannot serve: its private key
+    // lives on the token, registered through another browser or a different machine, so the
+    // broker store has no record of it. Overriding get() unconditionally therefore swallows
+    // every such ceremony and fails it with NotAllowedError — measured: a YubiKey used as 2FA
+    // on discord.com became unusable the moment the bridge was installed there. So when the
+    // broker holds nothing for the site, get() defers to the engine, which drives the token
+    // itself (touch, and PIN where the key requires one).
+    var nativeGet = null;
+    var brokerHas = false;
 
     function create(options) {
         return Promise.resolve().then(function () {
@@ -144,6 +157,11 @@
     }
 
     function get(options) {
+        // Nothing stored here for this site -> this is an existing credential somewhere else
+        // (the hardware itself). The engine can reach it; the broker cannot. Do not swallow it.
+        if (!brokerHas && nativeGet) {
+            return nativeGet.call(window.navigator.credentials, options);
+        }
         return Promise.resolve().then(function () {
             var pk = options && options.publicKey;
             if (!pk) { throw new DOMException('publicKey required', 'NotSupportedError'); }
@@ -267,6 +285,10 @@
         // in swapMethod, the page cannot tell the bridge is there.
         var creds = window.navigator.credentials;
         var proto = Object.getPrototypeOf(creds);
+        // Capture the engine's getter BEFORE swapping (and only once: a re-install would
+        // otherwise capture our own Proxy and recurse), so get() can defer to it.
+        if (!nativeGet && typeof creds.get === "function") { nativeGet = creds.get; }
+        brokerHas = flags.has === true;
         var okCreate = swapMethod(proto, "create", create);
         var okGet = swapMethod(proto, "get", get);
         return okCreate && okGet;

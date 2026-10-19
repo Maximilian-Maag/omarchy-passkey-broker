@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.2.6
+
+### Fixed
+- **An existing security key reaches the engine again; the bridge no longer swallows it.** The
+  bridge overrode `navigator.credentials.get()` on every allowed host and answered only from the
+  broker's own store. A credential registered elsewhere - one whose private key lives on the
+  token - has no broker record, so the override turned every such ceremony into `NotAllowedError`.
+  Measured: a YubiKey used as second factor on **discord.com** stopped working the moment the
+  bridge installed there.
+
+  `get()` now captures the engine's own getter before patching and, when the broker holds no
+  credential for the host, defers to it - the engine drives the token directly (touch, and PIN
+  where the key requires one). `create()` still goes to the broker, so registering a NEW passkey
+  is unchanged. Covered by three tests in `tests/js/bridge.test.js`.
+
 ## 1.2.5
 
 ### Fixed

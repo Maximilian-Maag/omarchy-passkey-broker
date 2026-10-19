@@ -392,3 +392,41 @@ test('install() reports the native credentials check', () => {
     const stripped = loadBridge(CFG, () => ({}), { native: false });
     assert.strictEqual(stripped.bridge.credentialsLookNative(), false);
 });
+
+// ── an existing security key must reach the ENGINE, not be swallowed by the broker ─────────
+// The broker only serves what IT registered. A key registered elsewhere lives on the token and
+// has no broker record, so get() must defer to the native implementation — otherwise every
+// existing key (a YubiKey used as 2FA, measured on discord.com) fails with NotAllowedError.
+
+test('get() defers to the native engine when the broker holds no credential for the host', async () => {
+    const { navigator, requests } = loadBridge(CFG, () => ({}), { has: false, install: true });
+    await assert.rejects(
+        () => navigator.credentials.get({ publicKey: { challenge: new Uint8Array([1]) } }),
+        /native get/);
+    assert.strictEqual(requests.filter((r) => r.url.includes('/authenticate')).length, 0,
+                       'the broker must not be asked for a credential it cannot have');
+});
+
+test('get() uses the broker when the broker holds a credential for the host', async () => {
+    const { navigator, requests } = loadBridge(CFG, () => ({
+        body: { ok: true, credential: {
+            id: 'cid', rawId: 'cid', type: 'public-key',
+            response: { clientDataJSON: 'eA', authenticatorData: 'eQ', signature: 'eg' } } }
+    }), { has: true, install: true });
+    const cred = await navigator.credentials.get({ publicKey: { challenge: new Uint8Array([1]) } });
+    assert.strictEqual(cred.id, 'cid');
+    assert.strictEqual(requests.filter((r) => r.url.endsWith('/authenticate')).length, 1);
+});
+
+test('create() still registers through the broker on a site with no credential', async () => {
+    const { navigator, requests } = loadBridge(CFG, () => ({
+        body: { ok: true, credential: {
+            id: 'cid', rawId: 'cid', type: 'public-key',
+            response: { clientDataJSON: 'eA', attestationObject: 'eg' } } }
+    }), { has: false, install: true });
+    const cred = await navigator.credentials.create({ publicKey: {
+        challenge: new Uint8Array([1]), rp: { id: 'example.com' } } });
+    assert.strictEqual(cred.id, 'cid');
+    assert.strictEqual(requests.filter((r) => r.url.endsWith('/register')).length, 1,
+                       'registration must still go to the broker (that is how a new passkey is made)');
+});

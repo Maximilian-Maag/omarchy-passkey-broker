@@ -76,7 +76,9 @@
       "tests": ["node", "--test", "tests/js/bridge.test.js"],
       "equivalent": [
         {"line": 40, "kind": "lt->le",
-         "reason": "the loop copies into a Uint8Array of exactly bin.length; the extra i == bin.length iteration writes out[i] past the end, which a typed-array integer-indexed write silently ignores. Observable output is identical."}
+         "reason": "the loop copies into a Uint8Array of exactly bin.length; the extra i == bin.length iteration writes out[i] past the end, which a typed-array integer-indexed write silently ignores. Observable output is identical."},
+        {"line": 134, "kind": "false->true",
+         "reason": "brokerHas's initial value is unobservable: get() is swapped onto CredentialsContainer.prototype only AFTER install() assigns brokerHas = flags.has, and every early return that leaves the initial value in place also leaves the native getter unswapped, so the fallback branch can never run."}
       ]
     }
   ],

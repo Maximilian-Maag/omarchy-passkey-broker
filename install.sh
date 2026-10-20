@@ -80,8 +80,12 @@ RestartSec=2
 WantedBy=default.target
 EOF
 systemctl --user daemon-reload
-systemctl --user enable --now passkey-broker.service
-echo "  Service enabled: passkey-broker.service"
+systemctl --user enable passkey-broker.service
+# `enable --now` STARTS an inactive unit but leaves a RUNNING one untouched, so re-running this
+# script (the documented way to update) would keep serving the old code until a manual restart -
+# which is how a fix can look applied and still not be live. restart does both jobs.
+systemctl --user restart passkey-broker.service
+echo "  Service enabled + restarted: passkey-broker.service"
 
 # ── 5. Build the browser bridge with the live port/token ──────────────────────
 "$BIN/passkey-bridge-build"

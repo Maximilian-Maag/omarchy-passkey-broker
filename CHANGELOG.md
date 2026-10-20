@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.2.7
+
+### Fixed
+- **The daemon follows `sites.json` when it changes, so `passkey-broker block|unblock` takes effect
+  without a restart.** The block list was read once and cached in memory for the life of the
+  daemon, while the CLI - a separate process - only writes the file. A host added to the block list
+  therefore stayed overridable until someone restarted the service: exactly the window in which the
+  bridge overrides WebAuthn on Google's sign-in and it is refused with "This browser or app may not
+  be secure". The policy now re-reads the file when its mtime/size changed. A policy handed an
+  explicit list (the tests, and any caller wanting a fixed policy) still owns its value. Covered by
+  four tests in `tests/test_unit_broker_sites.py` (including that `block` merges an external edit
+  instead of clobbering it).
+- **`install.sh` restarts the daemon instead of `enable --now`.** `enable --now` starts an inactive
+  unit but leaves a RUNNING one on its old code, so re-running the script (the documented way to
+  update) could leave a fix looking applied while the daemon still served the previous build. It
+  now enables and restarts, so an update is actually live.
+
 ## 1.2.6
 
 ### Fixed

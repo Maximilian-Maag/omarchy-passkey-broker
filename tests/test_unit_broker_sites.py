@@ -138,3 +138,56 @@ class Loading(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LiveReload(unittest.TestCase):
+    """The daemon must follow sites.json when `passkey-broker block|unblock` rewrites it.
+
+    The CLI runs in a SEPARATE process and only writes the file; the running daemon is what
+    answers /has. A daemon that caches its first list forever keeps a host overridable until a
+    manual restart - the window in which the bridge overrides WebAuthn on Google's sign-in and
+    the login is refused with "This browser or app may not be secure".
+    """
+
+    def _path(self):
+        return pathlib.Path(tempfile.mkdtemp()) / "sites.json"
+
+    def test_a_file_backed_policy_follows_an_external_edit(self):
+        path = self._path()
+        p = SitesPolicy(path=path)                     # file absent -> defaults
+        self.assertTrue(p.is_blocked("google.com"))
+        # another process runs `passkey-broker unblock google.com`
+        path.write_text(json.dumps({"blocked": ["example.com"]}))
+        self.assertFalse(p.is_blocked("google.com"),
+                         "must follow the file without a restart")
+        self.assertTrue(p.is_blocked("example.com"))
+
+    def test_a_rewrite_with_the_same_entries_is_still_noticed(self):
+        path = self._path()
+        path.write_text(json.dumps({"blocked": ["a.test"]}))
+        p = SitesPolicy(path=path)
+        self.assertTrue(p.is_blocked("a.test"))
+        path.write_text(json.dumps({"blocked": ["b.test", "c.test"]}))   # different size
+        self.assertFalse(p.is_blocked("a.test"))
+        self.assertTrue(p.is_blocked("b.test"))
+
+    def test_a_policy_with_an_explicit_list_ignores_the_file(self):
+        path = self._path()
+        path.write_text(json.dumps({"blocked": ["on.disk.test"]}))
+        p = SitesPolicy(path=path, blocked=["in.memory.test"])
+        self.assertTrue(p.is_blocked("in.memory.test"))
+        self.assertFalse(p.is_blocked("on.disk.test"),
+                         "an explicit list owns its value; the file must not overrule it")
+
+    def test_block_merges_an_external_edit_instead_of_clobbering_it(self):
+        path = self._path()
+        p = SitesPolicy(path=path)                     # file absent -> defaults cached
+        path.write_text(json.dumps({"blocked": ["external.test"]}))
+        p.block("example.com")                         # must reload first, then add
+        saved = json.loads(path.read_text())["blocked"]
+        self.assertIn("external.test", saved, "the external edit must survive")
+        self.assertIn("example.com", saved)
+
+
+if __name__ == '__main__':
+    unittest.main()

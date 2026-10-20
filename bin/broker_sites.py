@@ -20,7 +20,8 @@ Hence: ``install`` is a property of the HOST (blocked or not), and ``has`` is th
 the bridge uses to decide whether to advertise a platform authenticator. Blocked hosts default to
 the sign-in flows observed to break under an overridden API (see DEFAULT_BLOCKED), and the list is
 the user's to edit with ``passkey-broker block|unblock`` — unblocking is what you do before
-registering a passkey on a host that is blocked by default.
+registering a passkey on a host that is blocked by default. The daemon follows the file: an edit
+from the CLI (a separate process) takes effect on the next request, with no restart.
 """
 import json
 import os
@@ -73,13 +74,38 @@ class SitesPolicy:
     def __init__(self, path=None, blocked=None):
         self.path = pathlib.Path(path) if path else broker_paths.state_dir() / "sites.json"
         self._blocked = list(blocked) if blocked is not None else None
+        # Only a policy that OWNS the file follows it. One handed an explicit list (the
+        # tests, and any caller that wants a fixed policy) owns its value and must not be
+        # overruled by whatever is on disk.
+        self._watch = blocked is None
+        # (mtime_ns, size) of the file the cache reflects; None means it was absent when read.
+        self._stamp = None
 
     # ── persistence ──────────────────────────────────────────────────────────
+
+    def _file_stamp(self):
+        """(mtime_ns, size) of the policy file, or None when it does not exist. Nothing more than
+        a cheap way for a long-running daemon to notice the file changed under it."""
+        try:
+            st = self.path.stat()
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
 
     @property
     def blocked(self):
         if self._blocked is None:
             self._blocked = self._load()
+            self._stamp = self._file_stamp()
+        elif self._watch and self._file_stamp() != self._stamp:
+            # The file was edited under us. `passkey-broker block|unblock` writes it from a
+            # SEPARATE process, and the running daemon is what answers /has. Without following the
+            # file the daemon serves its first in-memory list for its whole life, so a host that
+            # must be left alone stays overridable until a manual restart - the window in which
+            # the bridge overrides WebAuthn on Google's sign-in and it is refused with "This
+            # browser or app may not be secure".
+            self._blocked = self._load()
+            self._stamp = self._file_stamp()
         return self._blocked
 
     def _load(self):

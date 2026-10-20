@@ -27,7 +27,11 @@
     {
       "path": "bin/broker_sites.py",
       "lang": "python",
-      "tests": ["python3", "-m", "unittest", "tests.test_unit_broker_sites", "-q"]
+      "tests": ["python3", "-m", "unittest", "tests.test_unit_broker_sites", "-q"],
+      "equivalent": [
+        {"line": 125, "kind": "number±1",
+         "reason": "json.dumps(indent=2) is the policy file's whitespace only; indent=3 parses to the identical object, which is the only thing any consumer (or test) reads."}
+      ]
     },
     {
       "path": "bin/broker_store.py",

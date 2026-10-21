@@ -145,5 +145,16 @@ The full harness is shared with the other Omarchy plugins (`tools/` is vendored 
   a fake CTAP device.
 - `credentials.get()` is answered from the stored credential for the relying party's id; the
   bridge does not yet implement conditional UI (`mediation: "conditional"`).
+- **A page with a strict `Content-Security-Policy` refuses the bridge's per-host check.** The
+  bridge asks the daemon `GET /has?host=…` over `http://127.0.0.1:<port>` from the page's own
+  context, and a page whose `connect-src` does not allow that origin blocks the request —
+  measured in the browser log on Google's sign-in pages and on `search.brave.com`:
+  `Refused to connect to 'http://127.0.0.1:37217/has?host=…'`. The bridge treats a blocked check
+  the same as an empty answer, so `brokerHas` stays false and `get()` defers to the engine
+  (v1.2.6 behaviour). For a page that opted out — or one whose credential is on the hardware
+  key — that is exactly right. On a host where the daemon *is* meant to serve, however, a CSP
+  refusal silently hands the ceremony back to the engine and the broker-stored credential is
+  never offered. Note the failure arrives with no message of its own; it is visible only in the
+  browser log, not in the daemon's.
 - The daemon reads the token PIN from its own environment; an interactive PIN prompt for
   browser-driven flows (a pinentry helper) is not implemented yet.

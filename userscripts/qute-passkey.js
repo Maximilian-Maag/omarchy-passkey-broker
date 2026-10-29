@@ -152,6 +152,10 @@
             });
         }).then(function (res) {
             if (!res.ok) { throw new DOMException('passkey-broker: ' + res.error, 'NotAllowedError'); }
+            // A passkey now exists for this host. A register-then-sign-in flow on the SAME page
+            // (no reload) must therefore reach the broker: leaving brokerHas false sent the next
+            // get() to the engine, which has no authenticator and hangs the sign-in.
+            brokerHas = true;
             return toPublicKeyCredential(res.credential);
         });
     }

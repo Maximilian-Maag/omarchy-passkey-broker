@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.2.8] — 2026-10-28
+
+### Fixed
+- **The bridge never learned about a passkey it had just registered** (#1), so a
+  register-then-sign-in flow on a single page (no reload) deferred the following
+  `get()` to the native engine — which has no authenticator behind it and hangs the
+  sign-in. `create()` now sets `brokerHas = true` on success, so the broker answers
+  the same-page assertion. Regression test added (it fails against the old code:
+  `Error: native get`).
+
 ## 1.2.7
 
 ### Fixed

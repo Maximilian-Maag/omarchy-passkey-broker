@@ -430,3 +430,25 @@ test('create() still registers through the broker on a site with no credential',
     assert.strictEqual(requests.filter((r) => r.url.endsWith('/register')).length, 1,
                        'registration must still go to the broker (that is how a new passkey is made)');
 });
+
+// A page that registers a passkey and then signs in WITHOUT a reload: the broker now holds a
+// credential for this host, so get() must reach the broker — deferring to the native engine
+// (which has no authenticator) would hang the very sign-in the bridge exists to serve.
+test('after create() stores a passkey, get() on the same page reaches the broker', async () => {
+    const { navigator, requests } = loadBridge(CFG, (req) => {
+        if (req.url.endsWith('/register')) {
+            return { body: { ok: true, credential: { id: 'cid', rawId: 'cid', type: 'public-key',
+                response: { clientDataJSON: 'eA', attestationObject: 'eg' } } } };
+        }
+        return { body: { ok: true, credential: { id: 'cid', rawId: 'cid', type: 'public-key',
+            response: { clientDataJSON: 'eA', authenticatorData: 'eQ', signature: 'eg' } } } };
+    }, { has: false, install: true });
+    const created = await navigator.credentials.create({ publicKey: {
+        challenge: new Uint8Array([1]), rp: { id: 'example.com' } } });
+    assert.strictEqual(created.id, 'cid');
+    const asserted = await navigator.credentials.get({ publicKey: {
+        challenge: new Uint8Array([2]), rpId: 'example.com' } });
+    assert.strictEqual(asserted.id, 'cid');
+    assert.strictEqual(requests.filter((r) => r.url.endsWith('/authenticate')).length, 1,
+                       'the just-registered passkey must be usable without a reload');
+});

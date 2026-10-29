@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.2.8] — 2026-10-28
+## 1.2.8
 
 ### Fixed
 - **The bridge never learned about a passkey it had just registered** (#1), so a

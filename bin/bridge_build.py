@@ -41,20 +41,48 @@ def greasemonkey_dirs():
             pathlib.Path(config) / "qutebrowser" / "greasemonkey"]
 
 
-def live_config():
-    """The port+token of the running daemon, or an empty port if none is running."""
+def policy_snapshot(store=None):
+    """(blocked_hosts, rp_ids_with_credentials) for baking into the script.
+
+    The bridge would otherwise have to ask the daemon `GET /has` from the PAGE, and a page whose
+    Content-Security-Policy forbids the loopback origin blocks that request. The bridge then
+    cannot tell "the broker has nothing here" from "the ask was refused", and a ceremony it was
+    meant to serve is silently handed back to an engine that cannot complete it. Baking the two
+    lists in removes the page request entirely.
+
+    Both lists are snapshots: the daemon re-renders the bridge after a registration and the CLI
+    after `block`/`unblock`, so they stay current.
+    """
+    import broker_sites
+    from broker_store import CredentialStore
+    store = store if store is not None else CredentialStore()
+    blocked = sorted({h for h in broker_sites.SitesPolicy().blocked if h})
+    has = sorted({(r.get("rp_id") or "").lower() for r in store.list() if r.get("rp_id")})
+    return blocked, has
+
+
+def live_config(store=None):
+    """The port+token of the running daemon (empty port if none) plus the baked host policy.
+
+    ``store`` is the credential store whose rp_ids go into the baked list; it defaults to the
+    process's own store, which is what the CLI wants. The daemon passes ITS store so a broker
+    constructed over a different directory still bakes the right list.
+    """
+    blocked, has = policy_snapshot(store)
+    empty = {"port": 0, "token": "", "build": "", "blocked": blocked, "has": has}
     server = broker_paths.server_json_path()
     if not server.exists():
-        return {"port": 0, "token": "", "build": ""}
+        return empty
     try:
         info = json.loads(server.read_text(encoding="utf-8"))
     except (ValueError, OSError):
-        return {"port": 0, "token": "", "build": ""}
+        return empty
     token_path = broker_paths.token_path()
     token = ""
     if token_path.exists():
         token = token_path.read_text(encoding="utf-8").strip()
-    return {"port": int(info.get("port", 0)), "token": token, "build": info.get("build", "")}
+    return {"port": int(info.get("port", 0)), "token": token, "build": info.get("build", ""),
+            "blocked": blocked, "has": has}
 
 
 def render(config):
@@ -87,8 +115,8 @@ def install(text, targets=None):
     return written
 
 
-def install_live(targets=None):
-    config = live_config()
+def install_live(targets=None, store=None):
+    config = live_config(store)
     return config, install(render(config), targets=targets)
 
 

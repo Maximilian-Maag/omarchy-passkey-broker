@@ -152,17 +152,15 @@ The full harness is shared with the other Omarchy plugins (`tools/` is vendored 
   a fake CTAP device.
 - `credentials.get()` is answered from the stored credential for the relying party's id; the
   bridge does not yet implement conditional UI (`mediation: "conditional"`).
-- **A page with a strict `Content-Security-Policy` refuses the bridge's per-host check.** The
-  bridge asks the daemon `GET /has?host=…` over `http://127.0.0.1:<port>` from the page's own
-  context, and a page whose `connect-src` does not allow that origin blocks the request —
-  measured in the browser log on Google's sign-in pages and on `search.brave.com`:
-  `Refused to connect to 'http://127.0.0.1:37217/has?host=…'`. The bridge treats a blocked check
-  the same as an empty answer, so `brokerHas` stays false and `get()` defers to the engine
-  (v1.2.6 behaviour). For a page that opted out — or one whose credential is on the hardware
-  key — that is exactly right. On a host where the daemon *is* meant to serve, however, a CSP
-  refusal silently hands the ceremony back to the engine and the broker-stored credential is
-  never offered. Note the failure arrives with no message of its own; it is visible only in the
-  browser log, not in the daemon's.
+- **A strict `Content-Security-Policy` no longer decides whether the bridge works.** The
+  bridge used to ask the daemon `GET /has?host=…` from the page's own context, and a page whose
+  `connect-src` forbids the loopback origin (measured on Google's sign-in and `search.brave.com`)
+  blocked it — indistinguishable from "nothing stored here", so the ceremony silently went back
+  to an engine that cannot complete it. `passkey-bridge-build` now **bakes the two per-host lists
+  into the script** it renders (`blocked` from the sites policy, `has` from the credential
+  store), so the decision needs no page request at all; the daemon re-renders the script after a
+  registration and the CLI after `block`/`unblock`/`delete`, keeping the baked lists current. A
+  build without them still falls back to the old probe.
 - The daemon takes the token PIN from its environment (`PASSKEY_TOKEN_PIN`); when that is
   unset and the token has a client PIN, it prompts once via `systemd-ask-password` and caches
   the value (see *The token's PIN*). `PASSKEY_BROKER_NO_PROMPT=1` disables prompting.

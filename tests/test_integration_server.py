@@ -164,6 +164,34 @@ class Routing(ServerCase):
         self.assertEqual(self.call("/list")[0], 200)
 
 
+class BridgeRefresh(ServerCase):
+    def test_a_registration_bakes_the_new_rp_id_into_the_rendered_bridge(self):
+        # The bridge decides "the broker holds a credential for this host" from lists baked into
+        # the script it runs, so a registration has to re-render it — otherwise a passkey just
+        # created cannot be used from the very page that created it.
+        import bridge_build
+        status, _ = self.create("just-registered.test")
+        self.assertEqual(status, 200)
+        scripts = [d / "qute-passkey.js" for d in bridge_build.greasemonkey_dirs()]
+        present = [s for s in scripts if s.is_file()]
+        self.assertTrue(present, "the bridge must have been re-rendered into a greasemonkey dir")
+        text = present[0].read_text()
+        self.assertIn('"has": ["just-registered.test"]', text)
+
+    def test_a_deletion_removes_the_rp_id_from_the_rendered_bridge(self):
+        import bridge_build
+        self.create("gone.test")
+        scripts = [d / "qute-passkey.js" for d in bridge_build.greasemonkey_dirs()]
+        present = [s for s in scripts if s.is_file()]
+        self.assertTrue(present)
+        self.assertIn("gone.test", present[0].read_text())
+        cred_id = self.store.list()[0]["cred_id"]
+        status, _ = self.call("/delete", {"cred_id": cred_id})
+        self.assertEqual(status, 200)
+        self.assertNotIn("gone.test", present[0].read_text(),
+                         "a deleted credential must drop out of the baked list")
+
+
 class FullCeremony(ServerCase):
     def test_register_authenticate_list_delete_over_http(self):
         status, reg = self.create()

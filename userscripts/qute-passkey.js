@@ -244,6 +244,37 @@
         } catch (e) { return false; }
     }
 
+    function hostMatches(host, entry) {
+        // Mirrors the daemon's own matching (broker.has_credential_for / SitesPolicy.is_blocked):
+        // exact host, or any parent domain of it.
+        return !!entry && (host === entry || host.slice(-(entry.length + 1)) === '.' + entry);
+    }
+
+    function siteFlagsLocal() {
+        // The daemon's answer, computed from the lists bridge_build baked into CONFIG, with no
+        // page request at all. A strict Content-Security-Policy blocks a page fetch to the
+        // loopback origin, and the blocked ask was indistinguishable from "nothing stored here",
+        // so the ceremony silently went back to an engine that cannot complete it.
+        // Returns null when the build carries no lists, so an older script still probes.
+        var host = '';
+        try { host = (window.location && window.location.hostname) || ''; } catch (e) { return null; }
+        if (!host) { return null; }
+        var blocked = CONFIG.blocked, has = CONFIG.has;
+        if (!blocked || !has) { return null; }
+        var install = !blocked.some(function (b) { return hostMatches(host, b); });
+        var found = has.some(function (r) { return hostMatches(host, r); });
+        return { has: found, install: install };
+    }
+
+    function daemonReachable() {
+        // probeHealthy() is a page request too, so a strict Content-Security-Policy refuses it
+        // even while the daemon is up. A build that carries the baked lists was rendered by a
+        // live daemon, so trust that: a port that has since died rejects visibly with a
+        // NotAllowedError, which is what the caller already handles.
+        if (probeHealthy()) { return true; }
+        return !!(CONFIG.port && CONFIG.blocked && CONFIG.has);
+    }
+
     function siteFlags() {
         // {has, install} for THIS page's site, or null when it cannot be determined. A
         // synchronous loopback GET (a simple request, so no preflight — a sync XHR cannot do
@@ -259,6 +290,8 @@
         // never switch the bridge off. (Gating installation on `has` made registration
         // impossible — the bridge was off on precisely the sites that needed it.)
         if (!CONFIG.port) { return null; }
+        var local = siteFlagsLocal();
+        if (local) { return local; }
         var host = "";
         try { host = (window.location && window.location.hostname) || ""; } catch (e) { return null; }
         if (!host) { return null; }
@@ -283,7 +316,7 @@
         if (!flags || !flags.install) { return false; }
         // Only claim a platform authenticator when the daemon is actually reachable; a page
         // that asks first must not be steered into a ceremony we cannot serve.
-        if (probeHealthy()) { installPublicKeyCredentialStatics(); }
+        if (daemonReachable()) { installPublicKeyCredentialStatics(); }
         // Patch CredentialsContainer.prototype, NOT the navigator instance: an own property on
         // navigator.credentials is the tell that gets a sign-in refused. Combined with the Proxy
         // in swapMethod, the page cannot tell the bridge is there.
@@ -310,7 +343,10 @@
         get: get,
         install: install,
         probeHealthy: probeHealthy,
+        daemonReachable: daemonReachable,
+        hostMatches: hostMatches,
         siteFlags: siteFlags,
+        siteFlagsLocal: siteFlagsLocal,
         credentialsLookNative: credentialsLookNative
     };
     if (typeof window !== 'undefined') {

@@ -206,6 +206,7 @@ def cmd_delete(args):
     broker = _make_broker(verifier=_null_verifier())
     result = broker.delete(args.cred_id)
     print("passkey-broker: %s" % ("deleted" if result["ok"] else "not found"))
+    _refresh_bridge_quietly()
     return 0 if result["ok"] else 1
 
 
@@ -227,6 +228,7 @@ def cmd_block(args):
     sites = _make_broker(verifier=_null_verifier()).sites
     sites.block(args.host)
     print("passkey-broker: bridge blocked on %s" % args.host)
+    _refresh_bridge_quietly()
     return 0
 
 
@@ -234,6 +236,7 @@ def cmd_unblock(args):
     sites = _make_broker(verifier=_null_verifier()).sites
     sites.unblock(args.host)
     print("passkey-broker: bridge allowed on %s" % args.host)
+    _refresh_bridge_quietly()
     print("  NOTE: if this host checks for a tampered WebAuthn API its sign-in may refuse the")
     print("  browser (\"This browser or app may not be secure\"). Re-block it with:")
     print("    passkey-broker block %s" % args.host)
@@ -285,6 +288,16 @@ def cmd_status(args):
     else:
         print("passkey-broker: not running")
     return 0 if report["running"] else 1
+
+
+def _refresh_bridge_quietly():
+    """Re-render the userscript after the store or the blocked list changed. Best effort: the
+    lists are a snapshot baked into the script, and a daemon start renders it again anyway."""
+    try:
+        import bridge_build
+        bridge_build.install_live()
+    except Exception:
+        pass
 
 
 def _install_bridge():

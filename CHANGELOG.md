@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.10
+
+### Fixed
+- **A page's Content-Security-Policy could silently take the bridge out of the ceremony.** The
+  per-host decision came from a page request (`GET /has?host=…`), which a strict `connect-src`
+  blocks — and a blocked ask was indistinguishable from "nothing stored here", so `get()` fell
+  back to an engine that cannot complete a ceremony and the broker-stored credential was never
+  offered. `passkey-bridge-build` now bakes `{blocked, has}` into the rendered script (the
+  daemon re-renders after a registration, the CLI after `block`/`unblock`/`delete`), so the
+  decision needs no page request; the platform-authenticator claim likewise trusts a build that
+  carries the lists when the health probe is refused. Builds without the lists keep probing.
+
 ## 1.2.9
 
 ### Added

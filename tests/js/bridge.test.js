@@ -46,6 +46,14 @@ function loadBridge(config, handler, opts) {
             // install() now asks /has before touching WebAuthn: only a site the broker holds a
             // credential for may be overridden. `opts.has === false` simulates "nothing to serve
             // here" (which must leave the page's WebAuthn completely alone).
+            // A page under a strict Content-Security-Policy cannot reach the loopback origin at
+            // all: `opts.csp` makes every page request fail the way the browser would.
+            if (opts.csp) {
+                this.status = 0;
+                this.responseText = '';
+                if (this.onerror) { this.onerror(new Error('blocked by CSP')); }
+                return;
+            }
             if (String(this.url).includes('/has')) {
                 this.status = 200;
                 this.responseText = JSON.stringify({ ok: true,
@@ -62,7 +70,8 @@ function loadBridge(config, handler, opts) {
     }
 
     const windowObj = {
-        location: { origin: 'https://example.com', hostname: 'example.com' },
+        location: { origin: 'https://' + (opts.host || 'example.com'),
+                    hostname: opts.host || 'example.com' },
         PublicKeyCredential: opts.noPublicKeyCredential ? undefined
             // The statics are own function properties of the constructor, as the engine has them;
             // the bridge swaps them in place (Proxy-wrapped, so they still look native).
@@ -451,4 +460,59 @@ test('after create() stores a passkey, get() on the same page reaches the broker
     assert.strictEqual(asserted.id, 'cid');
     assert.strictEqual(requests.filter((r) => r.url.endsWith('/authenticate')).length, 1,
                        'the just-registered passkey must be usable without a reload');
+});
+
+// ── the baked host policy: no page request, so a strict CSP cannot break the decision ──────
+// The bridge asks the daemon /has from the page, and a page whose connect-src forbids the
+// loopback origin blocks it. bridge_build bakes {blocked, has} into CONFIG instead, so the
+// decision needs no request at all.
+
+const BAKED = { port: 12345, token: 'tok', build: 'b1',
+                blocked: ['google.com', 'login.live.com'], has: ['example.com'] };
+
+test('a baked policy answers locally, issuing no page request', () => {
+    const { bridge, requests } = loadBridge(BAKED, () => ({}));
+    assert.deepStrictEqual(plain(bridge.siteFlagsLocal()), { has: true, install: true });
+    assert.deepStrictEqual(plain(bridge.siteFlags()), { has: true, install: true });
+    assert.strictEqual(requests.filter((r) => r.url.includes('/has')).length, 0,
+                       'the baked policy must not be re-asked from the page');
+});
+
+test('a baked policy keeps the bridge out of a host that refuses the override', () => {
+    const { bridge, navigator } = loadBridge(BAKED, () => ({}), { host: 'accounts.google.com' });
+    assert.deepStrictEqual(plain(bridge.siteFlagsLocal()), { has: false, install: false });
+    assert.strictEqual(bridge.install(), false);
+    assert.strictEqual(navigator.credentials.create.name, 'nativeCreate',
+                       'a blocked host is left exactly as found');
+});
+
+test('a parent-domain entry covers a subdomain, as the daemon matches it', () => {
+    const { bridge } = loadBridge(BAKED, () => ({}), { host: 'login.example.com' });
+    assert.deepStrictEqual(plain(bridge.siteFlagsLocal()), { has: true, install: true });
+    assert.strictEqual(bridge.hostMatches('example.com', 'example.com'), true);
+    assert.strictEqual(bridge.hostMatches('evil-example.com', 'example.com'), false,
+                       'a suffix match must be on a dot boundary');
+});
+
+test('get() reaches the broker for a baked host with no probe at all', async () => {
+    const { navigator, requests } = loadBridge(BAKED, () => ({ body: { ok: true, credential: {
+        id: 'cid', rawId: 'cid', type: 'public-key',
+        response: { clientDataJSON: 'eA', authenticatorData: 'eQ', signature: 'eg' } } } }));
+    const cred = await navigator.credentials.get({ publicKey: { challenge: new Uint8Array([1]) } });
+    assert.strictEqual(cred.id, 'cid');
+    assert.strictEqual(requests.filter((r) => r.url.includes('/has')).length, 0);
+    assert.strictEqual(requests.filter((r) => r.url.endsWith('/authenticate')).length, 1);
+});
+
+test('a strict CSP does not defeat the platform-authenticator claim', () => {
+    const { bridge } = loadBridge(BAKED, () => ({}), { csp: true });
+    assert.strictEqual(bridge.probeHealthy(), false, 'the page probe is refused');
+    assert.strictEqual(bridge.daemonReachable(), true, 'the baked policy still vouches for it');
+});
+
+test('with a CSP but no baked policy the bridge falls back to probing, as before', () => {
+    const { bridge } = loadBridge(CFG, () => ({}), { csp: true });
+    assert.strictEqual(bridge.siteFlagsLocal(), null, 'no baked lists to decide from');
+    assert.strictEqual(bridge.daemonReachable(), false, 'nothing vouches for a reachable daemon');
+    assert.strictEqual(bridge.install(), false, 'so the page is left untouched');
 });

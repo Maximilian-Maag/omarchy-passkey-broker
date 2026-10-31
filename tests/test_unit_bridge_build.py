@@ -64,7 +64,29 @@ class LiveConfig(unittest.TestCase):
             os.environ["XDG_STATE_HOME"] = self._old
 
     def test_no_server_json_is_disabled(self):
-        self.assertEqual(bridge_build.live_config(), {"port": 0, "token": "", "build": ""})
+        cfg = bridge_build.live_config()
+        self.assertEqual(cfg["port"], 0)
+        self.assertEqual(cfg["token"], "")
+        self.assertEqual(cfg["build"], "")
+        # the baked policy travels with the config even when no daemon is up
+        self.assertEqual(cfg["has"], [])
+        self.assertIn("google.com", cfg["blocked"])
+
+    def test_the_baked_policy_carries_stored_rp_ids_and_the_blocked_list(self):
+        import broker_sites
+        from broker_store import CredentialStore
+        CredentialStore().save({"cred_id": "cid-1", "rp_id": "Example.COM", "backend": "token"})
+        CredentialStore().save({"cred_id": "cid-2", "rp_id": "other.test", "backend": "software"})
+        broker_sites.SitesPolicy().block("extra.test")
+        cfg = bridge_build.live_config()
+        self.assertEqual(cfg["has"], ["example.com", "other.test"], "lowercased, sorted, distinct")
+        self.assertIn("extra.test", cfg["blocked"])
+
+    def test_render_embeds_the_baked_lists(self):
+        text = bridge_build.render({"port": 1, "token": "t", "build": "b",
+                                    "blocked": ["google.com"], "has": ["example.com"]})
+        self.assertIn('"blocked": ["google.com"]', text)
+        self.assertIn('"has": ["example.com"]', text)
 
     def test_reads_port_and_token(self):
         broker_paths.ensure_dir(broker_paths.state_dir())
@@ -74,6 +96,13 @@ class LiveConfig(unittest.TestCase):
         self.assertEqual(cfg["port"], 4321)
         self.assertEqual(cfg["token"], "secret-token")
         self.assertEqual(cfg["build"], "bX")
+
+    def test_server_json_without_a_port_disables_the_bridge(self):
+        # A server.json carrying no port means "no usable daemon": the bridge must end up with
+        # port 0 and disable itself, never point at a default that happens to be listening.
+        broker_paths.ensure_dir(broker_paths.state_dir())
+        broker_paths.server_json_path().write_text(json.dumps({"host": "127.0.0.1"}))
+        self.assertEqual(bridge_build.live_config()["port"], 0)
 
     def test_corrupt_server_json_is_disabled(self):
         broker_paths.ensure_dir(broker_paths.state_dir())

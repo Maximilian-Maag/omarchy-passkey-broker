@@ -200,18 +200,43 @@ class BrokerServer:
 
     # ── routes ────────────────────────────────────────────────────────────────
 
+    def _refresh_bridge(self):
+        """Re-render the userscript so its baked host lists match the store just changed.
+
+        The lists the bridge decides from are a snapshot taken when the script is rendered, and a
+        registration adds an rp_id the bridge has to recognise without asking the page — so the
+        daemon re-renders here. A failure is not fatal: the next start renders it again.
+        """
+        try:
+            import bridge_build
+            bridge_build.install_live(store=self.broker.store)
+        except Exception:
+            pass
+
+    def _register(self, body):
+        result = self.broker.register(
+            body.get("rp_id", ""), body.get("client_data", ""),
+            body.get("user_handle", "") or "", body.get("backend") or None,
+            bool(body.get("verify", True)))
+        if result.get("ok"):
+            self._refresh_bridge()
+        return result
+
+    def _delete(self, body):
+        result = self.broker.delete(body.get("cred_id", ""))
+        if result.get("ok"):
+            self._refresh_bridge()
+        return result
+
     def routes(self):
         broker = self.broker
         return {
-            "/register": lambda b: broker.register(
-                b.get("rp_id", ""), b.get("client_data", ""),
-                b.get("user_handle", "") or "", b.get("backend") or None,
-                bool(b.get("verify", True))),
+            "/register": self._register,
             "/authenticate": lambda b: broker.authenticate(
                 b.get("rp_id", ""), b.get("client_data", ""),
                 b.get("allow_ids"), bool(b.get("verify", True))),
             "/list": lambda b: {"ok": True, "credentials": broker.list_credentials()},
-            "/delete": lambda b: broker.delete(b.get("cred_id", "")),
+            "/delete": self._delete,
         }
 
     # ── lifecycle ─────────────────────────────────────────────────────────────

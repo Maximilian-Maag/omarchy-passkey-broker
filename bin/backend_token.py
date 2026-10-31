@@ -29,6 +29,31 @@ ALG_ES256 = -7
 # Where the token's PIN is read from. Not a CLI flag: a secret in argv shows up in `ps` and in
 # shell history, so it comes from the environment (or, later, an interactive pinentry).
 PIN_ENV = "PASSKEY_TOKEN_PIN"
+# Set to "1" to forbid prompting (a headless daemon, a service, CI). The PIN itself is still
+# never taken from argv — argv is visible in `ps` and lands in shell history.
+NO_PROMPT_ENV = "PASSKEY_BROKER_NO_PROMPT"
+ASKPASS = "systemd-ask-password"
+ASKPASS_TIMEOUT = 120
+
+
+def _ask_password():
+    """Prompt the user for the token PIN via the desktop askpass helper, else return ``""``.
+
+    systemd-ask-password is the session-aware helper: it surfaces the prompt on the user's
+    desktop rather than on a terminal the daemon may not own, which is what a browser-driven
+    ceremony needs. No helper on PATH (a bare TTY-less service) means no prompt, not a hang.
+    """
+    import shutil
+    import subprocess
+    exe = shutil.which(ASKPASS)
+    if not exe:
+        return ""
+    try:
+        proc = subprocess.run([exe, "--timeout=%d" % ASKPASS_TIMEOUT, "Passkey token PIN:"],
+                              capture_output=True, text=True, timeout=ASKPASS_TIMEOUT + 10)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return (proc.stdout or "").strip() if proc.returncode == 0 else ""
 
 
 class TokenError(Exception):
@@ -60,6 +85,9 @@ class TokenBackend:
     def __init__(self, ctap=None, pin=None):
         self._injected = ctap
         self._pin = pin
+        # The prompt is offered at most once per process: a second ceremony reuses the cached
+        # PIN rather than asking again, and a declined prompt is never repeated in a loop.
+        self._prompt_tried = False
 
     def available(self):
         """Is a usable security key attached? (An injected one counts, for tests.)
@@ -78,6 +106,29 @@ class TokenBackend:
             return bool(list(CtapHidDevice.list_devices()))
         except Exception:
             return False
+
+    def _pin_promptable(self, ctap):
+        """May this ceremony ask the user for a PIN? Only when the token has one at all.
+
+        A key with no ``clientPin`` cannot use a PIN, so prompting would be a pointless prompt;
+        the token's own advert is what decides, plus the opt-out and the once-per-process rule.
+        """
+        if self._prompt_tried or os.environ.get(NO_PROMPT_ENV) == "1":
+            return False
+        options = getattr(getattr(ctap, "info", None), "options", None) or {}
+        return bool(options.get("clientPin"))
+
+    def _effective_pin(self, ctap):
+        """The PIN to use: the configured one, else one prompt (cached for this process)."""
+        if self._pin:
+            return self._pin
+        if not self._pin_promptable(ctap):
+            return None
+        self._prompt_tried = True
+        pin = _ask_password()
+        if pin:
+            self._pin = pin
+        return self._pin
 
     @contextlib.contextmanager
     def _ctap(self):
@@ -147,7 +198,7 @@ class TokenBackend:
         client_data_hash = hashlib.sha256(client_data_bytes).digest()
         user = {"id": user_handle or os.urandom(16), "name": "passkey"}
         with self._ctap() as ctap:
-            protocol, token = self._uv_params(ctap, self._pin)
+            protocol, token = self._uv_params(ctap, self._effective_pin(ctap))
             options = {"rk": True}
             # A PIN supplies UV through pin_uv_param and the authenticator sets the UV flag
             # itself; asking for options.uv as well is rejected on a key without built-in UV.
@@ -189,7 +240,7 @@ class TokenBackend:
         cred_id = w.b64u_decode(record["cred_id"])
         allow = [{"type": "public-key", "id": cred_id}]
         with self._ctap() as ctap:
-            protocol, token = self._uv_params(ctap, self._pin)
+            protocol, token = self._uv_params(ctap, self._effective_pin(ctap))
             if not token and uv and _has_builtin_uv(ctap):
                 options = {"uv": True}
             else:

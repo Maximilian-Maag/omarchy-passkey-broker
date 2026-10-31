@@ -16,73 +16,159 @@
     {
       "path": "bin/webauthn_core.py",
       "lang": "python",
-      "tests": ["python3", "-m", "unittest", "discover", "-s", "tests",
-                "-p", "test_unit_webauthn_core.py", "-q"]
+      "tests": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests",
+        "-p",
+        "test_unit_webauthn_core.py",
+        "-q"
+      ]
     },
     {
       "path": "bin/broker_paths.py",
       "lang": "python",
-      "tests": ["python3", "-m", "unittest", "tests.test_unit_broker_paths", "-q"]
+      "tests": [
+        "python3",
+        "-m",
+        "unittest",
+        "tests.test_unit_broker_paths",
+        "-q"
+      ]
     },
     {
       "path": "bin/broker_sites.py",
       "lang": "python",
-      "tests": ["python3", "-m", "unittest", "tests.test_unit_broker_sites", "-q"],
+      "tests": [
+        "python3",
+        "-m",
+        "unittest",
+        "tests.test_unit_broker_sites",
+        "-q"
+      ],
       "equivalent": [
-        {"line": 125, "kind": "number±1",
-         "reason": "json.dumps(indent=2) is the policy file's whitespace only; indent=3 parses to the identical object, which is the only thing any consumer (or test) reads."}
+        {
+          "line": 125,
+          "kind": "number\u00b11",
+          "reason": "json.dumps(indent=2) is the policy file's whitespace only; indent=3 parses to the identical object, which is the only thing any consumer (or test) reads."
+        }
       ]
     },
     {
       "path": "bin/broker_store.py",
       "lang": "python",
-      "tests": ["python3", "-m", "unittest", "tests.test_unit_broker_store", "-q"]
+      "tests": [
+        "python3",
+        "-m",
+        "unittest",
+        "tests.test_unit_broker_store",
+        "-q"
+      ]
     },
     {
       "path": "bin/broker_verify.py",
       "lang": "python",
-      "tests": ["python3", "-m", "unittest", "tests.test_unit_broker_verify", "-q"]
+      "tests": [
+        "python3",
+        "-m",
+        "unittest",
+        "tests.test_unit_broker_verify",
+        "-q"
+      ]
     },
     {
       "path": "bin/backend_software.py",
       "lang": "python",
-      "tests": ["python3", "-m", "unittest", "tests.test_unit_backend_software", "-q"],
+      "tests": [
+        "python3",
+        "-m",
+        "unittest",
+        "tests.test_unit_backend_software",
+        "-q"
+      ],
       "equivalent": [
-        {"line": 34, "kind": "number±1",
-         "reason": "FLAG_UP | (FLAG_UV if uv else 0) vs (… else 1): FLAG_UP == 0x01, so the else branch is UP|0 or UP|1, both == UP. No input can distinguish them."}
+        {
+          "line": 34,
+          "kind": "number\u00b11",
+          "reason": "FLAG_UP | (FLAG_UV if uv else 0) vs (\u2026 else 1): FLAG_UP == 0x01, so the else branch is UP|0 or UP|1, both == UP. No input can distinguish them."
+        }
       ]
     },
     {
       "path": "bin/backend_token.py",
       "lang": "python",
-      "tests": ["python3", "-m", "unittest", "tests.test_unit_backend_token", "-q"]
+      "tests": [
+        "python3",
+        "-m",
+        "unittest",
+        "tests.test_unit_backend_token",
+        "-q"
+      ],
+      "equivalent": [
+        {
+          "line": 53,
+          "kind": "plus->minus",
+          "reason": "the subprocess timeout is a belt-and-braces over the askpass helper's own --timeout: it can fire only if the helper hangs past it, which no test can wait out, so the arithmetic is unobservable"
+        }
+      ]
     },
     {
       "path": "bin/broker.py",
       "lang": "python",
-      "tests": ["python3", "-m", "unittest", "tests.test_unit_broker",
-                "tests.test_regression_broker_contract", "-q"]
+      "tests": [
+        "python3",
+        "-m",
+        "unittest",
+        "tests.test_unit_broker",
+        "tests.test_regression_broker_contract",
+        "-q"
+      ]
     },
     {
       "path": "bin/broker_server.py",
       "lang": "python",
-      "tests": ["python3", "-m", "unittest", "tests.test_unit_broker_server",
-                "tests.test_integration_server", "-q"]
+      "tests": [
+        "python3",
+        "-m",
+        "unittest",
+        "tests.test_unit_broker_server",
+        "tests.test_integration_server",
+        "-q"
+      ]
     },
     {
       "path": "bin/bridge_build.py",
       "lang": "python",
-      "tests": ["python3", "-m", "unittest", "tests.test_unit_bridge_build", "-q"]
+      "tests": [
+        "python3",
+        "-m",
+        "unittest",
+        "tests.test_unit_bridge_build",
+        "-q"
+      ]
     },
     {
       "path": "userscripts/qute-passkey.js",
       "lang": "javascript",
-      "tests": ["node", "--test", "tests/js/bridge.test.js"],
+      "tests": [
+        "node",
+        "--test",
+        "tests/js/bridge.test.js"
+      ],
       "equivalent": [
-        {"line": 40, "kind": "lt->le",
-         "reason": "the loop copies into a Uint8Array of exactly bin.length; the extra i == bin.length iteration writes out[i] past the end, which a typed-array integer-indexed write silently ignores. Observable output is identical."},
-        {"line": 134, "kind": "false->true",
-         "reason": "brokerHas's initial value is unobservable: get() is swapped onto CredentialsContainer.prototype only AFTER install() assigns brokerHas = flags.has, and every early return that leaves the initial value in place also leaves the native getter unswapped, so the fallback branch can never run."}
+        {
+          "line": 40,
+          "kind": "lt->le",
+          "reason": "the loop copies into a Uint8Array of exactly bin.length; the extra i == bin.length iteration writes out[i] past the end, which a typed-array integer-indexed write silently ignores. Observable output is identical."
+        },
+        {
+          "line": 134,
+          "kind": "false->true",
+          "reason": "brokerHas's initial value is unobservable: get() is swapped onto CredentialsContainer.prototype only AFTER install() assigns brokerHas = flags.has, and every early return that leaves the initial value in place also leaves the native getter unswapped, so the fallback branch can never run."
+        }
       ]
     }
   ],

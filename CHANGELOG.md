@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.9
+
+### Added
+- **Interactive PIN prompt for the token backend.** A browser-driven ceremony with no
+  `PASSKEY_TOKEN_PIN` in the environment now prompts once through `systemd-ask-password` and
+  caches the answer for the daemon's lifetime, instead of failing with "set the env var and
+  retry" (the limitation the README used to list). A token without a client PIN is never
+  prompted; `PASSKEY_BROKER_NO_PROMPT=1` forbids prompting for headless use; with no helper on
+  PATH the call proceeds without a PIN, as before. The PIN is still never read from argv.
+
 ## 1.2.8
 
 ### Fixed

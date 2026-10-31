@@ -9,8 +9,10 @@ through.
 """
 import builtins
 import hashlib
+import os
 import pathlib
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -169,6 +171,68 @@ class Register(unittest.TestCase):
                 return super().make_credential(cdh, rp, user, kp, **kw)
         TokenBackend(ctap=C()).register("example.com", CLIENT_CREATE)
         self.assertEqual(seen["cdh"], hashlib.sha256(CLIENT_CREATE).digest())
+
+
+class PinPrompt(unittest.TestCase):
+    """The interactive PIN prompt: offered once, only when the token has a client PIN, and the
+    value is cached for the process — never taken from argv."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.bindir = pathlib.Path(self.tmp.name)
+        self.calls = pathlib.Path(self.tmp.name) / "prompts"
+        stub = self.bindir / "systemd-ask-password"
+        stub.write_text('#!/bin/bash\necho "$@" >> "%s"\nprintf "%%s\\n" "246810"\n'
+                        % self.calls)
+        stub.chmod(0o755)
+        saved = os.environ.get("PATH")
+        self.addCleanup(lambda: os.environ.__setitem__("PATH", saved) if saved is not None
+                        else os.environ.pop("PATH", None))
+        os.environ["PATH"] = "%s:%s" % (self.bindir, saved or "")
+        for var in ("PASSKEY_TOKEN_PIN", "PASSKEY_BROKER_NO_PROMPT"):
+            prev = os.environ.pop(var, None)
+            self.addCleanup(lambda v=var, p=prev: os.environ.__setitem__(v, p) if p is not None
+                            else os.environ.pop(v, None))
+
+    def prompts(self):
+        return self.calls.read_text().splitlines() if self.calls.exists() else []
+
+    def test_a_client_pin_token_is_prompted_once_and_cached(self):
+        # The prompt is asked through the token's advert, so it is exercised directly rather
+        # than through a full CTAP PIN exchange the fake device does not implement.
+        ctap = FakeCtap({"rk": True, "clientPin": True})
+        be = TokenBackend(ctap=ctap)
+        self.assertEqual(be._effective_pin(ctap), "246810")
+        self.assertEqual(be._effective_pin(ctap), "246810", "the second call uses the cache")
+        self.assertEqual(len(self.prompts()), 1, "the user is asked exactly once")
+        self.assertEqual(be._pin, "246810")
+        self.assertIn("--timeout=120", self.prompts()[0],
+                      "the prompt carries the helper's own timeout")
+
+    def test_a_token_without_client_pin_is_never_prompted(self):
+        ctap = FakeCtap({"rk": True})
+        self.assertIsNone(TokenBackend(ctap=ctap)._effective_pin(ctap))
+        self.assertEqual(self.prompts(), [], "a PIN-less token must not prompt")
+
+    def test_a_configured_pin_is_used_without_prompting(self):
+        ctap = FakeCtap({"rk": True, "clientPin": True})
+        be = TokenBackend(ctap=ctap, pin="999999")
+        self.assertEqual(be._effective_pin(ctap), "999999")
+        self.assertEqual(self.prompts(), [])
+
+    def test_prompting_can_be_forbidden(self):
+        os.environ["PASSKEY_BROKER_NO_PROMPT"] = "1"
+        ctap = FakeCtap({"rk": True, "clientPin": True})
+        self.assertIsNone(TokenBackend(ctap=ctap)._effective_pin(ctap))
+        self.assertEqual(self.prompts(), [], "the opt-out must be honoured")
+
+    def test_no_askpass_helper_means_no_prompt_and_no_crash(self):
+        os.environ["PATH"] = str(self.bindir / "empty")
+        be = TokenBackend(ctap=FakeCtap({"rk": True, "clientPin": True}))
+        rec, _ = be.register("example.com", CLIENT_CREATE, b"u1")   # must not raise
+        self.assertIsNone(be._pin)
+        self.assertEqual(rec["uv"], False, "with no PIN there is no token-verified UV")
 
 
 class Authenticate(unittest.TestCase):

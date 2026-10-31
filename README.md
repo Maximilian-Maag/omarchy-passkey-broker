@@ -88,6 +88,13 @@ argv (argv is visible in `ps` and in shell history):
 
     PASSKEY_TOKEN_PIN=123456 passkey-broker register --rp-id example.com --backend token
 
+When the environment value is **unset** and the token advertises a client PIN, a browser-driven
+ceremony prompts once through `systemd-ask-password` (the session-aware helper, so the prompt
+appears on the desktop rather than on a terminal the daemon may not own) and caches the answer
+for the daemon's lifetime. A token with no client PIN is never prompted, and
+`PASSKEY_BROKER_NO_PROMPT=1` forbids prompting entirely — for a headless service, where no
+helper exists and the call simply proceeds without a PIN.
+
 Two CTAP details are easy to get wrong and are pinned by tests, because both were hit against
 real hardware: the option `uv` is for a **built-in sensor** and is rejected with
 `CTAP2_ERR_UNSUPPORTED_OPTION` on a PIN-only key (a PIN sets the UV flag via
@@ -156,5 +163,6 @@ The full harness is shared with the other Omarchy plugins (`tools/` is vendored 
   refusal silently hands the ceremony back to the engine and the broker-stored credential is
   never offered. Note the failure arrives with no message of its own; it is visible only in the
   browser log, not in the daemon's.
-- The daemon reads the token PIN from its own environment; an interactive PIN prompt for
-  browser-driven flows (a pinentry helper) is not implemented yet.
+- The daemon takes the token PIN from its environment (`PASSKEY_TOKEN_PIN`); when that is
+  unset and the token has a client PIN, it prompts once via `systemd-ask-password` and caches
+  the value (see *The token's PIN*). `PASSKEY_BROKER_NO_PROMPT=1` disables prompting.

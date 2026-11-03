@@ -14,7 +14,8 @@ ID="Maximilian-Maag.passkey-broker"
 DEST="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/$ID"
 BIN="${HOME}/.local/bin"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-VENV="$DEST/.venv"
+source "$PLUGIN_DIR/tools/venv_path.sh"
+VENV="$(broker_venv_dir)"
 
 echo "omarchy-passkey-broker: installing from $PLUGIN_DIR"
 
@@ -34,13 +35,23 @@ echo "  Plugin files -> $DEST"
 # ── 2. Runtime dependencies in a private venv ─────────────────────────────────
 # The daemon needs 'cryptography' (ES256) and 'fido2' (CTAP2). The system Python on Omarchy
 # ships neither, and a systemd --user service cannot rely on a shell PATH that might point at
-# a mise/pyenv interpreter, so the deps go in a venv beside the plugin and everything points at
-# it explicitly. That is also what CI does, so the two stay in step.
+# a mise/pyenv interpreter, so the deps go in a venv of their own and everything points at it
+# explicitly. That is also what CI does, so the two stay in step.
+#
+# The venv lives OUTSIDE the plugin folder (tools/venv_path.sh explains why: a plugin folder with
+# a symlink in it — and a venv always has .venv/lib64 — fails `omarchy plugin validate`, so the
+# manager merges an update and then rolls it back).
 #
 # ensure_venv REBUILDS the venv when its interpreter can no longer import those deps — the trap
 # a version manager springing its `latest` alias onto a new Python creates. A bare existence
 # test is not enough and cost a night of crash-looping here; see tools/ensure_venv.sh.
 source "$PLUGIN_DIR/tools/ensure_venv.sh"
+LEGACY_VENV="$(broker_legacy_venv "$DEST")"
+if [[ -e $LEGACY_VENV ]]; then
+  rm -rf "$LEGACY_VENV"
+  echo "  removed the venv that lived inside the plugin folder (it is at $VENV now)"
+fi
+mkdir -p "$(dirname "$VENV")"
 ensure_venv "$VENV"
 echo "  Dependencies OK: $("$VENV/bin/python" -c 'import cryptography;print("cryptography", cryptography.__version__)')"
 

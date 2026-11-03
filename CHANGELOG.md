@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.2.12
+
+### Fixed
+- **The private venv lived inside the plugin folder, which made the plugin un-updatable.** A venv
+  always contains a symlink (`.venv/lib64` → `lib`), and `omarchy-plugin-validate` refuses symlinks
+  inside a plugin folder — so `omarchy plugin update` merged the new commit and then **rolled back**
+  ("update of 'Maximilian-Maag.passkey-broker' failed validation"), leaving the installation silently
+  pinned to the version it already had. It also dirtied the checkout on every install (an untracked
+  `.venv`, plus a `chmod` the manager's fast-forward then refused). The venv now lives under the
+  plugin's data dir — `${XDG_DATA_HOME:-$HOME/.local/share}/omarchy-passkey-broker/venv`, overridable
+  with `PASSKEY_BROKER_VENV` — install.sh removes the legacy copy inside the checkout, and the CLI
+  wrappers and the systemd unit point at the new path.
+
+### Tests
+- `tests/shell/test_venv_path.sh` pins the venv location: outside the plugin folder, under the data
+  dir, `XDG_DATA_HOME` honoured, an explicit override wins, and the legacy path still identified so
+  the installer can clean it up.
+
 ## 1.2.11
 
 ### Fixed

@@ -31,6 +31,37 @@ venv_healthy() {
   "$venv/bin/python" -c "import ${mods//,/, }" >/dev/null 2>&1
 }
 
+# venv_interpreter
+# Print a concrete, version-manager-independent python3, or fail.
+#
+# The trap this exists for, measured on this machine: `command -v python3` resolves to a
+# mise SHIM, and `readlink -f` on that shim resolves to the version manager's own binary
+# (/usr/bin/mise). A rebuild that used it ran `mise -m venv <dir>`, which mise answers with
+# "error: unexpected argument '-m' found" — leaving the broker with no interpreter at all and
+# its service down. Even the real path behind a shim is not safe on its own: mise keeps it
+# behind a moving alias (…/installs/python/latest), which is exactly the alias-bump trap above.
+#
+# So try, in order: an explicit override (tests stay hermetic; an operator can pin a build),
+# the system interpreter (a package at a stable path), the path the interpreter reports for
+# itself, and finally the bare name — skipping anything that IS a version manager.
+venv_interpreter() {
+  local candidate reported
+  reported="$(python3 -c 'import os, sys; print(os.path.realpath(sys.executable))' 2>/dev/null || true)"
+  for candidate in "${VENV_PYTHON:-}" /usr/bin/python3 "$reported" "$(command -v python3 || true)"; do
+    [[ -n $candidate && -x $candidate ]] || continue
+    case "$(basename "$candidate")" in
+      mise | asdf | pyenv | rbenv | nodenv | jenv | plenv) continue ;;
+    esac
+    # It has to actually run: a shim that answers with garbage must not become the interpreter.
+    if ! "$candidate" -c 'import sys' >/dev/null 2>&1; then
+      continue
+    fi
+    printf '%s\n' "$candidate"
+    return 0
+  done
+  return 1
+}
+
 # ensure_venv <venv-dir>
 # Make the venv exist, be healthy, and carry the runtime deps (cryptography, fido2). Idempotent:
 # a healthy venv is left exactly as it is, so re-running install.sh after a routine update is a
@@ -41,8 +72,10 @@ ensure_venv() {
     echo "  rebuilding venv at $venv (its interpreter cannot import its packages)"
     rm -rf "$venv"
     local py
-    py="$(readlink -f "$(command -v python3)" || true)"
-    [[ -n "$py" ]] || py="$(command -v python3)"
+    if ! py="$(venv_interpreter)"; then
+      echo "ERROR: no usable python3 to rebuild $venv (set VENV_PYTHON)" >&2
+      return 1
+    fi
     "$py" -m venv "$venv"
   fi
   "$venv/bin/pip" install --quiet --upgrade pip

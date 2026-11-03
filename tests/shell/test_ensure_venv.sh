@@ -54,7 +54,9 @@ chmod +x "$tmp/fakebin/python3"
 
 mkdir -p "$tmp/recreate"
 printf 'old\n' > "$tmp/recreate/REMNANT"
-PATH="$tmp/fakebin:$PATH" ensure_venv "$tmp/recreate" >/dev/null 2>&1
+# VENV_PYTHON pins the interpreter ensure_venv rebuilds with, so this stays hermetic: the
+# choice of interpreter is asserted separately below, with a hostile shim and no rebuild.
+VENV_PYTHON="$tmp/fakebin/python3" ensure_venv "$tmp/recreate" >/dev/null 2>&1
 if [[ -e "$tmp/recreate/REMNANT" ]]; then
   bad "a broken venv must be rebuilt (the old dir removed)"
 else
@@ -67,11 +69,45 @@ printf '#!/bin/bash\nexit 0\n' > "$tmp/keep/bin/python"
 printf '#!/bin/bash\nexit 0\n' > "$tmp/keep/bin/pip"
 chmod +x "$tmp/keep/bin/python" "$tmp/keep/bin/pip"
 printf 'keep\n' > "$tmp/keep/KEEPME"
-PATH="$tmp/fakebin:$PATH" ensure_venv "$tmp/keep" >/dev/null 2>&1
+VENV_PYTHON="$tmp/fakebin/python3" ensure_venv "$tmp/keep" >/dev/null 2>&1
 if [[ -e "$tmp/keep/KEEPME" ]]; then
   pass "a healthy venv is left untouched (never rebuilt)"
 else
   bad "a healthy venv is left untouched (never rebuilt)"
+fi
+
+# ── the version-manager shim must never become the interpreter ────────────────
+# Measured on this machine: `command -v python3` is a mise shim, `readlink -f` on it resolved
+# to /usr/bin/mise, and the rebuild therefore ran `mise -m venv` — "error: unexpected argument
+# '-m' found" — leaving the broker with no interpreter at all (service down). venv_interpreter
+# must skip the manager itself and land on an interpreter that actually runs.
+mkdir -p "$tmp/shimdir"
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\nexit 1\n' "$tmp/shim-calls" > "$tmp/shimdir/fake-manager"
+chmod +x "$tmp/shimdir/fake-manager"
+ln -sf "$tmp/shimdir/fake-manager" "$tmp/shimdir/python3"   # the shim IS the manager binary
+
+if [[ "$(readlink -f "$tmp/shimdir/python3")" == "$tmp/shimdir/fake-manager" ]]; then
+  pass "the trap is reproduced: resolving the shim lands on the manager binary"
+else
+  bad "could not reproduce the shim trap"
+fi
+
+resolved="$(PATH="$tmp/shimdir:$PATH" venv_interpreter 2>/dev/null || true)"
+if [[ -z $resolved ]]; then
+  bad "venv_interpreter found no interpreter behind a shim"
+elif [[ $resolved == "$tmp/shimdir/fake-manager" || $resolved == "$tmp/shimdir/python3" ]]; then
+  bad "venv_interpreter resolved to the version manager's own binary ($resolved)"
+elif ! "$resolved" -c 'import sys' >/dev/null 2>&1; then
+  bad "venv_interpreter returned something that is not a working interpreter ($resolved)"
+else
+  pass "venv_interpreter skips the shim and returns a working interpreter (${resolved##*/})"
+fi
+# Being ASKED for its interpreter path is fine (a real shim answers with the real path). Being
+# used to build the venv is not: that is what produced `mise -m venv`.
+if [[ -f "$tmp/shim-calls" ]] && grep -q -- "-m venv" "$tmp/shim-calls"; then
+  bad "the version manager was used to build the venv: $(tr '\n' ';' < "$tmp/shim-calls")"
+else
+  pass "the version manager was never used to build a venv"
 fi
 
 printf '\n'

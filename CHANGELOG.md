@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.2.11
+
+### Fixed
+- **A version-manager shim could become the interpreter, leaving the broker with no venv and its
+  service down.** `ensure_venv` rebuilt with `readlink -f "$(command -v python3)"`, and on a mise
+  machine that shim resolves to the version manager's own binary (`/usr/bin/mise`): the rebuild ran
+  `mise -m venv <dir>`, which mise answers with `error: unexpected argument '-m' found`, so the venv
+  was never created — `ExecStart` then pointed at a missing interpreter. The new `venv_interpreter`
+  resolves in order (explicit `VENV_PYTHON` override → the system interpreter → the path the
+  interpreter reports for itself → the bare name), skips anything that *is* a version manager
+  (`mise`, `asdf`, `pyenv`, …), and requires each candidate to actually run before choosing it, so a
+  shim that answers with garbage cannot be selected. Measured: the same command now rebuilds with
+  `/usr/bin/python3` and the daemon comes back up.
+- **Installing dirtied the plugin checkout, which then blocked `omarchy plugin update`.** `bin/passkey-bridge-build` was recorded `100644` while `install.sh` chmods it `+x` in the installed
+  checkout, so every install left a modified file behind and the next `git merge --ff-only` refused
+  with "you have local changes" — the plugin silently stopped receiving updates. The file is now
+  recorded executable.
+
+### Tests
+- `tests/shell/test_ensure_venv.sh` reproduces the shim trap (a `python3` that is a symlink to the
+  manager binary) and asserts that the manager is never used to build a venv while a rebuild still
+  produces a healthy one.
+
 ## 1.2.10
 
 ### Fixed

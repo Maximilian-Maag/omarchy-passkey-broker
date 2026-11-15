@@ -7,10 +7,12 @@ Microsoft sign-in flow starts a ceremony it then waits on forever when the broke
 serve — while every other site needs the bridge present for passkeys to work at all.
 """
 import json
+import os
 import pathlib
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "bin"))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))  # tests/ (for _isolation)
@@ -134,6 +136,22 @@ class Loading(unittest.TestCase):
         p = policy()
         p.block("example.com")
         self.assertEqual(p.path.stat().st_mode & 0o077, 0)
+
+    def test_the_temp_file_is_created_0600_not_chmodded_after(self):
+        # The 0600 must come from the open() itself. A write at the default umask followed by a
+        # chmod leaves a window in which sites.json — which names the sites the user uses — is
+        # world-readable. Forbid any late chmod on the temp file; it must still end up 0600.
+        p = policy()
+        real_chmod = os.chmod
+
+        def guard(path, mode, *a, **k):
+            if str(path).endswith(".tmp"):
+                raise AssertionError("the sites file must be created 0600, not chmod-ed after")
+            return real_chmod(path, mode, *a, **k)
+
+        with mock.patch("broker_sites.os.chmod", side_effect=guard):
+            p.block("example.com")
+        self.assertEqual(p.path.stat().st_mode & 0o777, 0o600)
 
 
 if __name__ == "__main__":

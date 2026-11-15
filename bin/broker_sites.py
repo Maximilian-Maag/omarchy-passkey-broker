@@ -121,9 +121,14 @@ class SitesPolicy:
     def _save(self):
         broker_paths.ensure_dir(self.path.parent)
         tmp = self.path.with_suffix(".tmp")
-        # 0600: this names the sites the user uses, so it is not world-readable.
-        tmp.write_text(json.dumps({"blocked": self.blocked}, indent=2) + "\n")
-        os.chmod(tmp, 0o600)
+        data = json.dumps({"blocked": self.blocked}, indent=2) + "\n"
+        # 0600 AT CREATION: this names the sites the user uses, so it must not be readable by
+        # anyone else. Creating with the default umask and chmod-ing afterwards left a window in
+        # which the file was world-readable, so open it with the mode from the start (as
+        # broker_store._atomic_write does).
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(data)
         os.replace(tmp, self.path)
 
     # ── policy ───────────────────────────────────────────────────────────────

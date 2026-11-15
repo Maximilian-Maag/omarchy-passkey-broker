@@ -36,13 +36,21 @@ function loadBridge(config, handler, opts) {
     const navigatorObj = Object.create({ credentials: nativeCreds });
 
     class FakeXHR {
-        constructor() { this.headers = {}; this.responseText = ''; this.status = 0; }
+        constructor() { this.headers = {}; this.responseText = ''; this.status = 0; this.timeout = 0; }
         open(method, url, async) { this.method = method; this.url = url; this.async = async; }
         setRequestHeader(name, value) { this.headers[name] = value; }
         send(body) {
             const req = { method: this.method, url: this.url, async: this.async,
                           headers: this.headers, body: body ? JSON.parse(body) : null };
             requests.push(req);
+            // `opts.stall` models a broker that accepts the connection and then goes silent: the
+            // request never completes. The only way the promise settles is if the caller armed a
+            // timeout, so fire ontimeout when one was set (and do nothing if it was not — the
+            // test then sees a hang and fails, which is the bug being pinned).
+            if (opts.stall) {
+                if (this.timeout > 0 && this.ontimeout) { this.ontimeout(); }
+                return;
+            }
             // install() now asks /has before touching WebAuthn: only a site the broker holds a
             // credential for may be overridden. `opts.has === false` simulates "nothing to serve
             // here" (which must leave the page's WebAuthn completely alone).
@@ -248,6 +256,18 @@ test('brokerRequest rejects when no daemon is configured', async () => {
     await assert.rejects(
         () => bridge.create({ publicKey: { challenge: new Uint8Array([1]), rp: { id: 'x' } } }),
         /not running/);
+});
+
+test('brokerRequest settles when the broker accepts the connection then stalls', async () => {
+    // A wedged broker: the connection opens but no response ever arrives. Without a timeout the
+    // page's navigator.credentials promise never settles and the ceremony hangs forever.
+    const { bridge } = loadBridge(CFG, () => ({}), { stall: true });
+    const settled = await Promise.race([
+        bridge.create({ publicKey: { challenge: new Uint8Array([1]), rp: { id: 'example.com' } } })
+            .then(() => 'resolved', (e) => 'rejected: ' + e.message),
+        new Promise((r) => setTimeout(() => r('hung'), 1000))
+    ]);
+    assert.match(settled, /^rejected: broker timed out/);
 });
 
 test('install() overrides navigator.credentials and the platform-authenticator probe', () => {

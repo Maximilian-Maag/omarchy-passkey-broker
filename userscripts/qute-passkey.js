@@ -70,6 +70,12 @@
             xhr.open('POST', 'http://127.0.0.1:' + CONFIG.port + path, true);
             xhr.setRequestHeader('Content-Type', 'application/json');
             xhr.setRequestHeader('X-Broker-Token', CONFIG.token || '');
+            // A broker that accepts the TCP connection and then stalls (a wedged daemon, a
+            // half-open socket) would otherwise never fire onload or onerror, and the
+            // navigator.credentials promise the page awaits would hang the ceremony forever.
+            // Bound the request and settle the promise when the bound is hit.
+            xhr.timeout = CONFIG.timeout || 15000;
+            xhr.ontimeout = function () { reject(new Error('broker timed out')); };
             xhr.onload = function () {
                 var data;
                 try { data = JSON.parse(xhr.responseText); }

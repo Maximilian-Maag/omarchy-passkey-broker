@@ -13,7 +13,9 @@ fail=0
 pass() { printf '  PASS: %s\n' "$1"; }
 bad()  { printf '  FAIL: %s\n' "$1"; fail=1; }
 
-plugin_dir="/home/someone/.config/omarchy/plugins/Maximilian-Maag.passkey-broker"
+# An XDG-relative placeholder for a plugin installed under the user's config dir. A literal
+# /home/<user>/... path here tripped the repo's own hygiene/no-absolute-home-paths check.
+plugin_dir="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/Maximilian-Maag.passkey-broker"
 
 venv="$(broker_venv_dir)"
 case "$venv" in

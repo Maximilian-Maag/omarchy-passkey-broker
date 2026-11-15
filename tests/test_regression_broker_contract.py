@@ -7,6 +7,7 @@ a loopback route that answered without the token.
 """
 import json
 import pathlib
+import socket
 import sys
 import tempfile
 import unittest
@@ -120,6 +121,37 @@ class ClientDataEchoed(unittest.TestCase):
         result = broker.register("example.com", CD)
         echoed = w.b64u_decode(result["credential"]["response"]["clientDataJSON"])
         self.assertEqual(echoed, w.b64u_decode(CD))
+
+
+class OversizedBodyFailsFast(unittest.TestCase):
+    """A client that announces a huge Content-Length and then sends only a byte of it must not
+    pin a worker thread. The body size is capped, so the server answers without reading the
+    promised bytes — otherwise it would block until the socket read timed out."""
+
+    def setUp(self):
+        self.store = CredentialStore(pathlib.Path(tempfile.mkdtemp()))
+        self.server = BrokerServer(no_key_broker(self.store), token="regression-token")
+        self.server.start()
+
+    def tearDown(self):
+        self.server.stop()
+
+    def test_huge_content_length_and_partial_body_does_not_wedge(self):
+        conn = socket.create_connection(("127.0.0.1", self.server.port), timeout=5)
+        try:
+            conn.sendall(b"POST /list HTTP/1.1\r\n"
+                         b"Host: 127.0.0.1\r\n"
+                         b"X-Broker-Token: regression-token\r\n"
+                         b"Content-Type: application/json\r\n"
+                         b"Content-Length: 100000000\r\n"
+                         b"\r\n"
+                         b"{")                     # one byte of a promised 100 000 000
+            conn.settimeout(5)
+            status_line = conn.recv(4096).split(b"\r\n", 1)[0]
+        finally:
+            conn.close()
+        self.assertIn(b"400", status_line,
+                      "an oversize body must be refused without reading it")
 
 
 if __name__ == "__main__":

@@ -49,6 +49,20 @@ def build_stamp(directory=None):
 class _Handler(BaseHTTPRequestHandler):
     server_version = "passkey-broker"
 
+    # A request body here is a small JSON object (a client_data blob, an allow_ids list). Cap it
+    # so a client cannot announce an enormous Content-Length and make the worker read forever.
+    MAX_BODY_BYTES = 64 * 1024
+    # And bound every socket read so a client that opens the connection and trickles (or stalls
+    # outright) releases the thread instead of pinning it. http.server reads the request line
+    # under this timeout and turns it into a clean close.
+    SOCKET_TIMEOUT = 10
+
+    def setup(self):
+        # BaseHTTPRequestHandler.setup does NOT install a socket timeout (unlike
+        # StreamRequestHandler), so set it here on the connection before any read.
+        super().setup()
+        self.connection.settimeout(self.SOCKET_TIMEOUT)
+
     # The bridge runs as a page script, so its XHR to this loopback server is CROSS-ORIGIN (the
     # page's origin differs by port) and the browser applies CORS. Without these headers the
     # response is blocked and the bridge reports "broker unreachable" on every site, and the
@@ -100,9 +114,18 @@ class _Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
             return None
-        if length <= 0:
+        # An unbounded read lets a client announce a huge length and pin this thread while it
+        # dribbles the body out. Reject oversize up front, before touching the socket.
+        if length < 0 or length > self.MAX_BODY_BYTES:
+            return None
+        if length == 0:
             return {}
-        raw = self.rfile.read(length)
+        try:
+            raw = self.rfile.read(length)
+        except OSError:
+            # the socket read timed out (socket.timeout is an OSError): a trickling client must
+            # not hold the worker thread open indefinitely.
+            return None
         try:
             return json.loads(raw.decode("utf-8"))
         except (ValueError, UnicodeDecodeError):

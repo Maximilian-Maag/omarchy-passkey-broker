@@ -14,9 +14,22 @@ import time
 
 import broker_paths
 
-# The record fields that are secret. Kept in one place so a future field can be reviewed
-# deliberately rather than leaking by default when someone adds one.
+# The record fields that are secret, and the ONLY place that list lives. Anything that hands a
+# record to a caller outside the trusted core (the CLI listing, the HTTP /list route) routes it
+# through scrub(), so a new secret field is withheld everywhere by adding it here — rather than
+# by hoping every call site remembered to omit it.
 SECRET_FIELDS = ("private_pem",)
+
+
+def scrub(record):
+    """A copy of ``record`` with every SECRET_FIELDS entry removed.
+
+    Load-bearing: applied in ``PasskeyBroker.list_credentials`` (the boundary every record
+    crosses on its way to a listing), so it is what actually keeps a private key out of a
+    listing. Withholding a new secret field is then a one-line change here, not a hunt for
+    every place a record is surfaced.
+    """
+    return {key: value for key, value in record.items() if key not in SECRET_FIELDS}
 
 
 def _atomic_write(path, text, mode=0o600):

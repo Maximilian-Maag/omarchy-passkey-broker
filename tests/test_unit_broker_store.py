@@ -172,5 +172,27 @@ class AtomicWriteCleanup(unittest.TestCase):
         self.assertEqual([p.name for p in parent.glob("*.tmp")], [])
 
 
+class Scrub(unittest.TestCase):
+    """SECRET_FIELDS is the single registry of secret record fields; scrub() is what makes it
+    load-bearing — it withholds every listed field wherever a record is surfaced for listing."""
+
+    def test_removes_every_secret_field_but_keeps_the_rest(self):
+        from broker_store import SECRET_FIELDS, scrub
+        rec = {"cred_id": "c", "rp_id": "example.com", "backend": "software",
+               "private_pem": "stand-in-key-material"}
+        clean = scrub(rec)
+        for field in SECRET_FIELDS:
+            self.assertNotIn(field, clean)
+        self.assertNotIn("private_pem", clean)
+        self.assertEqual(clean["cred_id"], "c")
+        self.assertEqual(clean["rp_id"], "example.com")
+
+    def test_does_not_mutate_the_original_record(self):
+        from broker_store import scrub
+        rec = {"cred_id": "c", "private_pem": "K"}
+        scrub(rec)
+        self.assertIn("private_pem", rec)
+
+
 if __name__ == "__main__":
     unittest.main()

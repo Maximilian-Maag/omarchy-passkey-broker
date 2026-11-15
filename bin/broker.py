@@ -12,7 +12,7 @@ import webauthn_core as w
 from backend_software import SoftwareBackend
 from backend_token import PIN_ENV, TokenBackend, TokenError
 from broker_sites import SitesPolicy
-from broker_store import CredentialStore
+from broker_store import CredentialStore, scrub
 from broker_verify import FprintdVerifier, VerifyResult
 
 
@@ -190,9 +190,11 @@ class PasskeyBroker:
                 "install": not self.sites.is_blocked(host)}
 
     def list_credentials(self):
-        return [{"cred_id": r.get("cred_id"), "rp_id": r.get("rp_id"),
-                 "backend": r.get("backend"), "sign_count": r.get("sign_count"),
-                 "user_handle": r.get("user_handle"), "created": r.get("created")}
+        # scrub() strips SECRET_FIELDS (private_pem), so a secret can never leak into a listing
+        # even if this projection is later widened — the withholding lives in one registry.
+        return [scrub({"cred_id": r.get("cred_id"), "rp_id": r.get("rp_id"),
+                       "backend": r.get("backend"), "sign_count": r.get("sign_count"),
+                       "user_handle": r.get("user_handle"), "created": r.get("created")})
                 for r in self.store.list()]
 
     def delete(self, cred_id):

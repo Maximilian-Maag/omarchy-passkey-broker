@@ -8,6 +8,7 @@ that a missing daemon yields a disabled bridge rather than a stale one pointing 
 import json
 import os
 import pathlib
+import socket
 import sys
 import tempfile
 import unittest
@@ -19,6 +20,27 @@ from _isolation import isolate  # noqa: E402
 setUpModule, tearDownModule = isolate()
 import bridge_build  # noqa: E402
 import broker_paths  # noqa: E402
+
+
+def listening_socket():
+    """A bound, listening loopback socket plus its port — a live daemon stand-in.
+
+    ``server.json`` alone is not proof of a live daemon anymore (the builder probes the port),
+    so a test that means "a daemon IS running" must actually listen.
+    """
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    return srv, srv.getsockname()[1]
+
+
+def dead_port():
+    """A loopback port that is free right now (nothing listening), for the stale-file case."""
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.bind(("127.0.0.1", 0))
+    port = srv.getsockname()[1]
+    srv.close()                                    # bound then released: nothing answers
+    return port
 
 
 class Render(unittest.TestCase):
@@ -90,12 +112,29 @@ class LiveConfig(unittest.TestCase):
 
     def test_reads_port_and_token(self):
         broker_paths.ensure_dir(broker_paths.state_dir())
-        broker_paths.server_json_path().write_text(json.dumps({"port": 4321, "build": "bX"}))
-        broker_paths.token_path().write_text("secret-token\n")
+        srv, port = listening_socket()
+        try:
+            broker_paths.server_json_path().write_text(json.dumps({"port": port, "build": "bX"}))
+            broker_paths.token_path().write_text("secret-token\n")
+            cfg = bridge_build.live_config()
+            self.assertEqual(cfg["port"], port)
+            self.assertEqual(cfg["token"], "secret-token")
+            self.assertEqual(cfg["build"], "bX")
+        finally:
+            srv.close()
+
+    def test_server_json_present_but_nothing_listening_disables_the_bridge(self):
+        # A crashed daemon leaves server.json behind. Deciding "running" from the file's
+        # existence alone rendered a bridge pointed at a dead port, and every passkey attempt
+        # hung — the exact failure this whole plugin exists to fix. The port must be probed.
+        broker_paths.ensure_dir(broker_paths.state_dir())
+        port = dead_port()
+        broker_paths.server_json_path().write_text(json.dumps({"port": port, "build": "b"}))
         cfg = bridge_build.live_config()
-        self.assertEqual(cfg["port"], 4321)
-        self.assertEqual(cfg["token"], "secret-token")
-        self.assertEqual(cfg["build"], "bX")
+        self.assertEqual(cfg["port"], 0, "a stale server.json must not yield a live bridge")
+        self.assertEqual(cfg["token"], "")
+        # and the rendered CONFIG the browser sees says port 0, so the bridge disables itself
+        self.assertIn('"port": 0', bridge_build.render(cfg))
 
     def test_server_json_without_a_port_disables_the_bridge(self):
         # A server.json carrying no port means "no usable daemon": the bridge must end up with

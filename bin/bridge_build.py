@@ -15,6 +15,7 @@ import json
 import os
 import pathlib
 import re
+import socket
 import sys
 
 import broker_paths
@@ -61,12 +62,31 @@ def policy_snapshot(store=None):
     return blocked, has
 
 
+def _daemon_listening(port, host="127.0.0.1", timeout=1.0):
+    """Is something actually accepting connections on the loopback port?
+
+    A ``server.json`` only proves a daemon ONCE wrote it — the file survives a crash, so its
+    mere existence is not a liveness signal. Actually connect: a refused or timed-out connect
+    means nothing is listening, and the caller then treats the daemon as down. Opening the
+    connection is enough (the accept happens before the daemon reads anything).
+    """
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            return True
+    except (OSError, ValueError):
+        return False
+
+
 def live_config(store=None):
     """The port+token of the running daemon (empty port if none) plus the baked host policy.
 
     ``store`` is the credential store whose rp_ids go into the baked list; it defaults to the
     process's own store, which is what the CLI wants. The daemon passes ITS store so a broker
     constructed over a different directory still bakes the right list.
+
+    The port is probed, not trusted from the file: a stale ``server.json`` left by a crashed
+    daemon would otherwise render a bridge pointed at a dead port, and every passkey attempt
+    would hang — the exact failure this module exists to prevent.
     """
     blocked, has = policy_snapshot(store)
     empty = {"port": 0, "token": "", "build": "", "blocked": blocked, "has": has}
@@ -75,13 +95,16 @@ def live_config(store=None):
         return empty
     try:
         info = json.loads(server.read_text(encoding="utf-8"))
-    except (ValueError, OSError):
+        port = int(info.get("port", 0) or 0)
+    except (ValueError, OSError, TypeError):
+        return empty
+    if not port or not _daemon_listening(port):
         return empty
     token_path = broker_paths.token_path()
     token = ""
     if token_path.exists():
         token = token_path.read_text(encoding="utf-8").strip()
-    return {"port": int(info.get("port", 0)), "token": token, "build": info.get("build", ""),
+    return {"port": port, "token": token, "build": info.get("build", ""),
             "blocked": blocked, "has": has}
 
 

@@ -157,6 +157,7 @@ def cmd_register(args):
     backend = None if args.backend == "auto" else args.backend
     result = broker.register(args.rp_id, client_data, args.user_handle or "", backend,
                              verify=args.verify)
+    _refresh_bridge_quietly()
     return _finish(result, args, "registered")
 
 

@@ -27,18 +27,13 @@ def token_path():
     return state_dir() / "token"
 
 
-def socket_path():
-    """The unix socket the daemon listens on; also the liveness signal."""
-    return state_dir() / "broker.sock"
-
-
-def pidfile_path():
-    return state_dir() / "broker.pid"
-
-
 def server_json_path():
     """Mirrors reader-server's build-stamped server.json: how a client learns the live
-    port/build without guessing. Written atomically so a reader never sees a half file."""
+    port/build without guessing. Written atomically so a reader never sees a half file.
+
+    The daemon speaks TCP over loopback (see broker_server); this JSON file — not a unix
+    socket or a pidfile — is the liveness and discovery signal.
+    """
     return state_dir() / "server.json"
 
 

@@ -43,7 +43,6 @@ class StateDir(unittest.TestCase):
         os.environ["XDG_STATE_HOME"] = self.tmp
         root = broker_paths.state_dir()
         for child in (broker_paths.credentials_dir(), broker_paths.token_path(),
-                      broker_paths.socket_path(), broker_paths.pidfile_path(),
                       broker_paths.server_json_path()):
             self.assertEqual(child.parent, root)
 
